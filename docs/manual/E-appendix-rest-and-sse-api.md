@@ -5,7 +5,7 @@ API. Everything the UI does goes through the same endpoints, so
 anything the UI can do can be scripted.
 
 There is **no authentication**: the API is reachable by anyone on the
-hub's network (or connected to its access point). The network boundary
+hub's Ethernet network. The network boundary
 *is* the security boundary — treat the hub like any other appliance on
 a trusted LAN.
 
@@ -21,7 +21,7 @@ software, the running hub serves its own reference:
 
 Both are **generated live from the running build**, so they always
 match the firmware you are talking to. `<hub>` is the address from
-your title bar / WiFi name, e.g. `raspimidihub-735C.local`.
+your title bar, e.g. `raspimidihub-735C.local`.
 
 The JSON shape:
 

@@ -315,6 +315,13 @@ class MidiEngine:
         if network_midi is not None:
             net_client_ids = set(network_midi.get_mirror_client_ids())
             user_clients |= net_client_ids
+        # The OSC bridge is one user client (IN + OUT). It has no sound
+        # card, so it is registered below like a plugin.
+        osc = getattr(self, "_osc", None)
+        osc_client_ids: set[int] = set()
+        if osc is not None and osc.alsa_client_id is not None:
+            osc_client_ids.add(osc.alsa_client_id)
+            user_clients |= osc_client_ids
         # BlueZ (modern kernels) also creates an ALSA seq user client
         # per connected BLE-MIDI peripheral, named after the device.
         # Whitelist any user client whose name matches a known BT
@@ -333,7 +340,8 @@ class MidiEngine:
         # BLE clients are treated as hardware-ish so DeviceRegistry.scan
         # routes them through the `name in bt_macs` branch and gives
         # them `bt-<MAC>` stable ids.
-        plugin_only_clients = (user_clients - ble_client_ids) | net_client_ids
+        plugin_only_clients = ((user_clients - ble_client_ids)
+                                | net_client_ids | osc_client_ids)
         hw_client_ids = [d.client_id for d in self._devices
                          if d.client_id not in plugin_only_clients]
         # Pass {client_id: name} so DeviceRegistry can identify
@@ -375,6 +383,9 @@ class MidiEngine:
                     self._device_registry.register_network_device(
                         m.alsa_client_id, m.stable_id,
                         m.device_name, m.remote_hub)
+        if osc is not None and osc.alsa_client_id is not None:
+            self._device_registry.register_plugin(
+                osc.alsa_client_id, "osc", "OSC")
         # BLE-MIDI bridge devices are registered by the regular
         # device_registry.scan() above — the bridge names its ALSA
         # client after the BT alias, so the `name in bt_macs` branch

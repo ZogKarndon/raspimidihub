@@ -1,15 +1,8 @@
-"""Tests for the Phase 5.5 update orchestrator.
+"""Tests for the update orchestrator.
 
-The orchestrator switches the Pi between AP and client mode to fetch
-new releases. We can't test that switch without real hardware, so the
-unit tests here cover the deterministic pieces:
-
-  - version sorting (handles pre-release tags correctly)
-  - GitHub release list parsing (skips drafts, deals with missing assets)
-  - storage layout (list_stored_versions, prune_stored)
-  - status file round-trip
-  - the orchestrator's branching (path picks, error messages) using a
-    fake WiFi manager + fake config
+Updates run only when the wired network already has internet. These
+tests cover version sorting, GitHub release parsing, storage layout,
+the status file, and the ethernet-only branch.
 """
 
 from __future__ import annotations
@@ -181,42 +174,8 @@ class TestStatusFile:
 # Orchestrator branching
 # ---------------------------------------------------------------------------
 
-class _FakeWifi:
-    """Minimal stand-in for WifiManager — lets us test the orchestrator's
-    routing without touching real hostapd/wpa_supplicant."""
-
-    def __init__(self, *, can_join: bool = True) -> None:
-        self.mode = "ap"
-        self.ip = "192.168.4.1"
-        self.can_join = can_join
-        self.ap_calls: list[tuple[str, str]] = []
-        self.client_calls: list[tuple[str, str]] = []
-
-    async def start_client_with_fallback(self, ssid, password, ap_ssid, ap_password):
-        self.client_calls.append((ssid, password))
-        if self.can_join:
-            self.mode = "client"
-        else:
-            # Simulate the fallback branch: WifiManager itself flips
-            # back to AP before returning when join fails.
-            self.mode = "ap"
-
-    def start_ap(self, ssid="", password="", band=None, country=None):
-        self.ap_calls.append((ssid, password))
-        self.mode = "ap"
-
-
-def _make_config(**wifi_overrides) -> SimpleNamespace:
-    base = {
-        "mode": "ap",
-        "ap_ssid": "Test-AP",
-        "ap_password": "midihub1",
-        "client_ssid": "",
-        "client_password": "",
-        "wifi_mode_pref": "ap_only",
-    }
-    base.update(wifi_overrides)
-    return SimpleNamespace(wifi=base)
+def _make_config() -> SimpleNamespace:
+    return SimpleNamespace()
 
 
 def _redirect_status(monkeypatch, tmp_path):
@@ -227,9 +186,7 @@ class TestUpdateFetcher:
     def test_uses_current_network_when_reachable(self, monkeypatch, tmp_path):
         _redirect_status(monkeypatch, tmp_path)
         monkeypatch.setattr(uf, "probe_internet", lambda timeout=4.0: True)
-        wifi_mgr = _FakeWifi()
-        cfg = _make_config()
-        fetcher = uf.UpdateFetcher(wifi_mgr, cfg)
+        fetcher = uf.UpdateFetcher(None, _make_config())
 
         called = []
 
@@ -240,216 +197,19 @@ class TestUpdateFetcher:
         result = asyncio.run(fetcher.run(work))
         assert result == "result"
         assert called == [True]
-        # No WiFi switches, no AP restoration.
-        assert wifi_mgr.client_calls == []
-        assert wifi_mgr.ap_calls == []
+        assert uf.read_status()["step"] == "done"
 
-    def test_no_internet_ap_only_aborts(self, monkeypatch, tmp_path):
+    def test_no_internet_aborts_without_using_wifi(self, monkeypatch, tmp_path):
         _redirect_status(monkeypatch, tmp_path)
         monkeypatch.setattr(uf, "probe_internet", lambda timeout=4.0: False)
-        wifi_mgr = _FakeWifi()
-        cfg = _make_config(wifi_mode_pref="ap_only")
-        fetcher = uf.UpdateFetcher(wifi_mgr, cfg)
+        fetcher = uf.UpdateFetcher(None, _make_config())
 
         async def work():
             raise AssertionError("work shouldn't run")
 
         with pytest.raises(uf.NoInternetError) as exc:
             asyncio.run(fetcher.run(work))
-        assert "ethernet" in exc.value.message.lower() \
-            or "wifi for updates" in exc.value.message.lower()
-        # Status file recorded the error so the UI can read it.
+        assert "ethernet" in exc.value.message.lower()
+        assert "wi-fi" in exc.value.message.lower()
         status = uf.read_status()
-        assert status["step"].startswith("error")
-
-    def test_no_internet_no_creds_aborts(self, monkeypatch, tmp_path):
-        _redirect_status(monkeypatch, tmp_path)
-        monkeypatch.setattr(uf, "probe_internet", lambda timeout=4.0: False)
-        wifi_mgr = _FakeWifi()
-        # User selected wifi_for_updates but never saved credentials.
-        cfg = _make_config(wifi_mode_pref="wifi_for_updates", client_ssid="")
-        fetcher = uf.UpdateFetcher(wifi_mgr, cfg)
-
-        async def work():
-            raise AssertionError("work shouldn't run")
-
-        with pytest.raises(uf.NoInternetError) as exc:
-            asyncio.run(fetcher.run(work))
-        assert "credentials" in exc.value.message.lower()
-
-    def test_transient_wifi_path_succeeds(self, monkeypatch, tmp_path):
-        _redirect_status(monkeypatch, tmp_path)
-        # Probe sequence: first call (current net) fails; second call
-        # (after switching to client) succeeds. Use a stateful counter
-        # so both probes go through this single fixture.
-        calls = {"n": 0}
-
-        def probe(timeout=4.0):
-            calls["n"] += 1
-            return calls["n"] >= 2
-
-        monkeypatch.setattr(uf, "probe_internet", probe)
-        # Watchdog calls would shell out to systemd-run / systemctl.
-        monkeypatch.setattr(uf, "schedule_watchdog", lambda reason: True)
-        monkeypatch.setattr(uf, "cancel_watchdog", lambda: None)
-
-        wifi_mgr = _FakeWifi(can_join=True)
-        cfg = _make_config(
-            wifi_mode_pref="wifi_for_updates",
-            client_ssid="Home", client_password="hunter2",
-        )
-        fetcher = uf.UpdateFetcher(wifi_mgr, cfg)
-
-        log = []
-
-        async def work():
-            log.append(("work", wifi_mgr.mode))
-            return "ok"
-
-        result = asyncio.run(fetcher.run(work))
-        assert result == "ok"
-        # Joined the user's network for the work, then back to AP.
-        assert wifi_mgr.client_calls == [("Home", "hunter2")]
-        assert wifi_mgr.ap_calls == [("Test-AP", "midihub1")]
-        assert log == [("work", "client")]
-        # Orchestrator's terminal 'done' (written after switching back)
-        # is what the UI matches on to clear its spinner. If we left it
-        # at 'switching-to-ap' instead, the UI never knew it could stop
-        # polling.
-        status = uf.read_status()
-        assert status["step"] == "done"
-
-    def test_transient_wifi_path_join_failure_restores_ap(
-            self, monkeypatch, tmp_path):
-        _redirect_status(monkeypatch, tmp_path)
-        monkeypatch.setattr(uf, "probe_internet", lambda timeout=4.0: False)
-        monkeypatch.setattr(uf, "schedule_watchdog", lambda reason: True)
-        monkeypatch.setattr(uf, "cancel_watchdog", lambda: None)
-
-        wifi_mgr = _FakeWifi(can_join=False)  # Wrong password / out of range
-        cfg = _make_config(
-            wifi_mode_pref="wifi_for_updates",
-            client_ssid="Home", client_password="wrong",
-        )
-        fetcher = uf.UpdateFetcher(wifi_mgr, cfg)
-
-        async def work():
-            raise AssertionError("shouldn't run when join fails")
-
-        with pytest.raises(uf.NoInternetError) as exc:
-            asyncio.run(fetcher.run(work))
-        assert "Home" in exc.value.message
-        # Tried to join, fallback already restored AP via WifiManager
-        # itself — orchestrator just sees mode != "client".
-        assert wifi_mgr.client_calls == [("Home", "wrong")]
-
-    def test_start_client_raising_restores_ap_and_keeps_watchdog_armed(
-            self, monkeypatch, tmp_path):
-        """Regression for #wifi-stuck-after-update-check.
-
-        A 5s `nmcli connection reload` cap was firing TimeoutExpired
-        while NM was busy, propagating out of start_client *and*
-        start_client_with_fallback, bypassing the AP-fallback. The
-        UpdateFetcher.run finally then cancelled the watchdog, leaving
-        the Pi stranded in client/unknown mode with the AP off.
-
-        Post-fix invariants this test pins down:
-          1. start_client_with_fallback raising still leads the
-             orchestrator to call _switch_to_ap (last-ditch restore).
-          2. If the Pi *isn't* back in AP mode after the orchestrator
-             exits, cancel_watchdog() is NOT called — let the watchdog
-             fire and force a service restart.
-        """
-        _redirect_status(monkeypatch, tmp_path)
-        monkeypatch.setattr(uf, "probe_internet", lambda timeout=4.0: False)
-        monkeypatch.setattr(uf, "schedule_watchdog", lambda reason: True)
-        cancel_calls: list[bool] = []
-        monkeypatch.setattr(uf, "cancel_watchdog",
-                            lambda: cancel_calls.append(True))
-
-        class _BrokenWifi(_FakeWifi):
-            """Simulates start_client_with_fallback itself raising
-            (e.g. nmcli reload TimeoutExpired propagating out of the
-            inner subprocess call, pre-fix) AND failing to restore AP
-            on its own. The orchestrator must compensate."""
-            async def start_client_with_fallback(self, ssid, password,
-                                                  ap_ssid, ap_password):
-                self.client_calls.append((ssid, password))
-                self.mode = "unknown"  # mid-switch, neither AP nor client
-                raise RuntimeError(
-                    "Command '['nmcli', 'connection', 'reload']' "
-                    "timed out after 5 seconds")
-
-        wifi_mgr = _BrokenWifi()
-        cfg = _make_config(
-            wifi_mode_pref="wifi_for_updates",
-            client_ssid="Home", client_password="hunter2",
-        )
-        fetcher = uf.UpdateFetcher(wifi_mgr, cfg)
-
-        async def work():
-            raise AssertionError("work must not run when assoc fails")
-
-        with pytest.raises(uf.NoInternetError):
-            asyncio.run(fetcher.run(work))
-
-        # (1) Orchestrator called _switch_to_ap as the last-ditch
-        # restore — proves we don't rely solely on the watchdog when
-        # start_client_with_fallback misbehaves.
-        assert wifi_mgr.ap_calls == [("Test-AP", "midihub1")]
-        assert wifi_mgr.mode == "ap"
-        # (2) Because we ended up back in AP, the watchdog is allowed
-        # to be cancelled. That's expected; the dangerous case is the
-        # next test where we DON'T end up in AP.
-        assert cancel_calls == [True]
-
-    def test_watchdog_stays_armed_when_ap_restore_fails(
-            self, monkeypatch, tmp_path):
-        """The pathological case: nothing brought us back to AP, not
-        even the orchestrator's last-ditch _switch_to_ap. The watchdog
-        is then the only thing standing between the user and a stuck
-        Pi — we must NOT cancel it."""
-        _redirect_status(monkeypatch, tmp_path)
-        monkeypatch.setattr(uf, "probe_internet", lambda timeout=4.0: False)
-        monkeypatch.setattr(uf, "schedule_watchdog", lambda reason: True)
-        cancel_calls: list[bool] = []
-        monkeypatch.setattr(uf, "cancel_watchdog",
-                            lambda: cancel_calls.append(True))
-
-        class _TotallyBrokenWifi(_FakeWifi):
-            async def start_client_with_fallback(self, ssid, password,
-                                                  ap_ssid, ap_password):
-                self.client_calls.append((ssid, password))
-                self.mode = "unknown"
-                raise RuntimeError("nmcli timed out")
-
-            def start_ap(self, ssid="", password="", band=None, country=None):
-                # Even the AP restore fails — e.g. hostapd unit refuses
-                # to start, dnsmasq port collision, etc.
-                self.ap_calls.append((ssid, password))
-                # mode stays "unknown" — start_ap did NOT recover.
-
-        wifi_mgr = _TotallyBrokenWifi()
-        cfg = _make_config(
-            wifi_mode_pref="wifi_for_updates",
-            client_ssid="Home", client_password="hunter2",
-        )
-        fetcher = uf.UpdateFetcher(wifi_mgr, cfg)
-
-        async def work():
-            raise AssertionError("work must not run")
-
-        with pytest.raises(uf.NoInternetError):
-            asyncio.run(fetcher.run(work))
-
-        # We tried to switch back to AP — both via the orchestrator's
-        # last-ditch path. (Once is enough; the test pre-fix would
-        # have skipped this entirely.)
-        assert wifi_mgr.ap_calls  # at least one attempt
-        # Crucially, the watchdog was NOT cancelled — wifi.mode never
-        # got back to "ap", so the watchdog stays armed and will
-        # systemctl-restart raspimidihub at the 180s deadline, which
-        # brings the AP back on the boot path. THIS is the regression
-        # guard: if a future refactor reintroduces unconditional
-        # cancel_watchdog(), this assertion catches it immediately.
-        assert cancel_calls == []
+        assert status["step"] == "error-no-internet"

@@ -7,25 +7,18 @@ installation (chapter 2).
 
 ## Boot the Pi
 
-Plug in power. After roughly twenty seconds the red **PWR** LED turns
-off and the green **ACT** LED settles to steady-on: the routing
-service is running. The WiFi access point comes up at the same time,
-broadcasting an SSID of the form `RaspiMIDIHub-XXXX`. (Full LED
-table: chapter 2; if steady-on is never reached: chapter 14.)
+Plug in power and an Ethernet cable. After roughly twenty seconds
+the red **PWR** LED turns off and the green **ACT** LED settles to
+steady-on: the routing service is running. (Full LED table:
+chapter 2; if steady-on is never reached: chapter 14.)
 
-## Join the Access Point
+## Open the UI
 
-Open the WiFi settings on a phone, tablet, or laptop, find the
-`RaspiMIDIHub-XXXX` SSID, and connect with the default password
-`midihub1`. The captive portal opens the UI automatically on most
-operating systems; if not, browse to `http://raspimidihub-<id>.local/`
-or the gateway IP from the phone's WiFi-info screen.
-
-::: warning
-The default AP password is published in every copy of this manual.
-Change it (**Settings → WiFi → AP Password**) before the unit leaves
-a trusted environment.
-:::
+On a computer on the same network, browse to
+`http://raspimidihub-<id>.local/`. `<id>` is the four-character
+code the title bar will show (for example `735C`). If mDNS is not
+available, use the DHCP address of the Pi. There is no Wi-Fi
+network to join.
 
 ## Plug In Two MIDI Devices
 
@@ -95,11 +88,13 @@ survives a reboot. To capture the setup as a JSON file -- backup,
 sharing with another unit, before/after snapshots -- use **Export
 Config**; **Import Config** restores it later (chapter 11).
 
-## Change the AP Password
+## Talk OSC
 
-Open **Settings → WiFi → AP Password**, type a new password (at least
-8 characters), and tap **Save**. The AP restarts; the phone
-momentarily drops and reconnects with the new credentials.
+**Settings → Network** lists SuperCollider servers the hub can see
+on the cable (or on a USB Ethernet link to another Pi). Route MIDI
+into the **OSC** device to send `/midi/note_on` and the other
+`/midi/…` messages. Chapter 13 has the message list and the cases
+discovery does not cover.
 
 ## What to Read Next
 

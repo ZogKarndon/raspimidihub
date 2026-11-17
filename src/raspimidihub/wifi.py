@@ -1,6 +1,10 @@
-"""WiFi Access Point, client mode, and network interface management.
+"""Ethernet interface helpers, plus a legacy Wi-Fi manager.
 
-Manages hostapd + dnsmasq for AP mode, NetworkManager for client/ethernet.
+The running service is Ethernet-only. Boot calls `disable_wifi_radio()`
+and never starts an access point or a Wi-Fi client; config, the API,
+and the UI do not offer Wi-Fi setup. `WifiManager` is still here so
+the unit tests (and a console that really wants hostapd) can drive the
+old radio path. Do not call it from the service.
 """
 
 import asyncio
@@ -31,31 +35,69 @@ CLIENT_TIMEOUT = 30  # seconds to wait for client connection
 NON_DFS_5GHZ_CHANNELS = [36, 40, 44, 48]
 
 
-def _get_mac_suffix() -> str:
-    """Get last 4 hex digits of wlan0 MAC for unique SSID."""
+def _mac_suffix_from(iface: str) -> str | None:
     try:
-        mac = Path(f"/sys/class/net/{WLAN_IFACE}/address").read_text().strip()
-        return mac.replace(":", "")[-4:].upper()
-    except Exception:
-        return "0000"
+        mac = Path(f"/sys/class/net/{iface}/address").read_text().strip()
+    except OSError:
+        return None
+    if not mac or mac == "00:00:00:00:00:00":
+        return None
+    return mac.replace(":", "")[-4:].upper()
+
+
+def _get_mac_suffix() -> str:
+    """Last 4 hex digits of a stable interface MAC.
+
+    Prefer wlan0 when it exists so a hub that already used that token
+    keeps its hostname and badge. Fall back to eth0, then any other
+    interface, when there is no wireless NIC.
+    """
+    for iface in (WLAN_IFACE, "eth0"):
+        suffix = _mac_suffix_from(iface)
+        if suffix:
+            return suffix
+    try:
+        for iface in sorted(Path("/sys/class/net").iterdir()):
+            if iface.name in ("lo", WLAN_IFACE, "eth0"):
+                continue
+            suffix = _mac_suffix_from(iface.name)
+            if suffix:
+                return suffix
+    except OSError:
+        pass
+    return "0000"
 
 
 def default_ap_ssid() -> str:
-    """The AP SSID used when none is configured: RaspiMIDIHub-<MAC
-    suffix> (e.g. RaspiMIDIHub-735C). The suffix is hardware-derived
-    and not configurable; a user-set `wifi.ap_ssid` overrides the whole
-    name."""
+    """Hub identity shown in the title bar: RaspiMIDIHub-<MAC suffix>
+    (e.g. RaspiMIDIHub-735C). The name is historical — the hub no
+    longer broadcasts it as a Wi-Fi SSID."""
     return f"RaspiMIDIHub-{_get_mac_suffix()}"
 
 
 def default_hostname() -> str:
     """The system hostname for a hub: raspimidihub-<MAC suffix> (e.g.
-    raspimidihub-735C). This is the SAME hardware-derived token as the
-    AP SSID (default_ap_ssid) and the UI title-bar badge, so a hub has
-    one identity everywhere. Unique per device, so two hubs on the same
-    network never collide on `raspimidihub.local` (which avahi would
-    otherwise rename to raspimidihub-2.local, making names unstable)."""
+    raspimidihub-735C). Same hardware token as the title-bar badge, so
+    a hub has one identity everywhere. Unique per device, so two hubs
+    on the same network never collide on `raspimidihub.local` (which
+    avahi would otherwise rename to raspimidihub-2.local)."""
     return f"raspimidihub-{_get_mac_suffix()}"
+
+
+def disable_wifi_radio() -> None:
+    """Block the Wi-Fi radio. Ethernet and USB interfaces are untouched.
+
+    Missing tools, no radio, or not running as root are ignored: a
+    dev machine without wlan0 should still boot.
+    """
+    for cmd in (
+        ["rfkill", "block", "wifi"],
+        ["nmcli", "radio", "wifi", "off"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
 
 
 def _run(cmd: list[str], check: bool = True, timeout: int = 10) -> subprocess.CompletedProcess:

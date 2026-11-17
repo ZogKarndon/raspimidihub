@@ -4,6 +4,7 @@ exercise the pure logic: diff summaries, rolling-backup pruning, and the
 ping-pong autosave slot selection."""
 
 import contextlib
+import json
 
 import pytest
 
@@ -224,7 +225,7 @@ def test_default_routing_default_is_none():
     assert cfg.Config().default_routing == "none"
 
 
-def test_factory_reset_clears_state_keeps_backups_and_wifi(store):
+def test_factory_reset_clears_state_and_wifi_keeps_backups(store):
     c = cfg.Config()
     c._data = _cfg(plugins=3, connections=2)
     c._data["wifi"] = {"mode": "ap", "ap_password": "secret-pw"}
@@ -232,30 +233,33 @@ def test_factory_reset_clears_state_keeps_backups_and_wifi(store):
     c.write_autosave()                  # a resume snapshot the reset must clear
     assert len(c.list_backups()) == 1
 
+    # keep_wifi is ignored: networking is Ethernet-only.
     assert c.factory_reset(keep_wifi=True) is True
 
-    # In-memory reset to defaults (no plugins, no connections), WiFi kept.
     assert c._data.get("plugins", []) == []
     assert c._data["connections"] == []
     assert c._data["default_routing"] == "none"
-    assert c._data["wifi"]["ap_password"] == "secret-pw"
+    assert "wifi" not in c._data
+    assert c._data["osc"]["enabled"] is True
     # Resume snapshot gone, backups kept.
     assert all(not slot.exists() for slot in cfg.AUTOSAVE_SLOTS)
     assert len(c.list_backups()) == 1
-    # A fresh boot load comes up factory-fresh (config.json, no autosave).
     fresh = cfg.Config()
     assert fresh.load() is True
     assert fresh._loaded_from_autosave is False
     assert fresh._data.get("plugins", []) == []
-    assert fresh._data["wifi"]["ap_password"] == "secret-pw"
+    assert "wifi" not in fresh._data
 
 
-def test_factory_reset_can_clear_wifi(store):
+def test_load_drops_legacy_wifi_block(store):
     c = cfg.Config()
     c._data = _cfg(plugins=1)
     c._data["wifi"] = {"mode": "ap", "ap_password": "secret-pw"}
-    assert c.factory_reset(keep_wifi=False) is True
-    assert c._data["wifi"] == cfg.DEFAULT_CONFIG["wifi"]
+    c.save()
+    fresh = cfg.Config()
+    assert fresh.load() is True
+    assert "wifi" not in fresh._data
+    assert fresh.osc["listen_port"] == 9000
 
 
 # ---- autosave full-document encode --------------------------------------
@@ -386,36 +390,36 @@ def test_autosave_status_survives_fork_path(store, monkeypatch):
 
 
 # ---- boot priority vs. appliance settings -------------------------------
-# Appliance settings (wifi_mode_pref, AP password, network_midi) are
-# written to config.json immediately via asave(), but they are NOT MIDI
-# edits — they never bump the dirty counter that drives the autosave. On
-# boot, load() prefers the autosave slot over config.json, so a setting
-# saved only to config.json is shadowed by a staler resume snapshot and
-# reverts on the next restart/update. The fix: the API forces an autosave
-# after these writes (api.py wifi/network_midi endpoints, autosave_now()).
-# These pin both the hazard and the invariant the fix relies on.
+# Appliance settings (osc target, network_midi) are written to
+# config.json immediately via asave(), but they are NOT MIDI edits —
+# they never bump the dirty counter that drives the autosave. On boot,
+# load() prefers the autosave slot over config.json, so a setting saved
+# only to config.json is shadowed by a staler resume snapshot. The API
+# forces an autosave after these writes (autosave_now()).
 
 def test_boot_autosave_shadows_config_json(store):
     """A staler autosave wins over config.json on boot — this is the
     hazard that makes forcing an autosave after an appliance write
     necessary."""
     c = cfg.Config()
-    c._data["wifi"]["wifi_mode_pref"] = "ap_only"
+    c._data["network_midi"] = json.loads(json.dumps(c._data["network_midi"]))
+    c._data["network_midi"]["enabled"] = False
     c.write_autosave()                                   # older snapshot
-    c._data["wifi"]["wifi_mode_pref"] = "wifi_for_updates"
+    c._data["network_midi"]["enabled"] = True
     c.save()                                             # config.json only
     fresh = cfg.Config()
     fresh.load()
-    assert fresh._data["wifi"]["wifi_mode_pref"] == "ap_only"
+    assert fresh._data["network_midi"]["enabled"] is False
 
 
 def test_appliance_setting_survives_boot_when_autosave_refreshed(store):
     """When the appliance write also refreshes the autosave (what the API
     now does via autosave_now), the setting survives the boot."""
     c = cfg.Config()
-    c._data["wifi"]["wifi_mode_pref"] = "wifi_for_updates"
+    c._data["osc"] = json.loads(json.dumps(c._data["osc"]))
+    c._data["osc"]["target"] = "192.168.7.2:57110"
     c.save()
     c.write_autosave()                                   # the forced refresh
     fresh = cfg.Config()
     fresh.load()
-    assert fresh._data["wifi"]["wifi_mode_pref"] == "wifi_for_updates"
+    assert fresh._data["osc"]["target"] == "192.168.7.2:57110"

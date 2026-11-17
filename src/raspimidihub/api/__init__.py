@@ -14,7 +14,8 @@ register_<domain>() function:
     config_routes.py  /api/config/*, /api/backups/*
     network.py        /api/network/*, /api/bluetooth/*,
                       /api/network-midi/*
-    wifi_routes.py    /api/wifi/*
+    wifi_routes.py    /api/wifi  (Ethernet-only status; no setup)
+    osc_routes.py     /api/osc, /api/osc/settings
     plugins.py        /api/plugins/*, /api/cc-learn/*
 
 Route ORDER: web.py matches first route hit per method (exact then
@@ -40,6 +41,7 @@ from .config_routes import register_config_routes
 from .connections import register_connections
 from .devices import register_devices
 from .network import register_network
+from .osc_routes import register_osc
 from .plugins import register_plugins
 from .system import register_system
 from .updates import register_updates
@@ -51,12 +53,12 @@ log = logging.getLogger(__name__)
 def register_api(server: WebServer, engine: MidiEngine, config: Config,
                  wifi: WifiManager | None = None,
                  bluetooth: BluetoothMidi | None = None,
-                 network_midi=None):
+                 network_midi=None, osc=None):
     """Register all API routes on the web server."""
 
     ctx = ApiContext(server=server, engine=engine, config=config,
                      wifi=wifi, bluetooth=bluetooth,
-                     network_midi=network_midi)
+                     network_midi=network_midi, osc=osc)
 
     # Wire the dirty-tracker SSE side so mark_dirty / clear_dirty can fan
     # out a config-dirty event from any thread (CC-driven param mutations
@@ -133,4 +135,5 @@ def register_api(server: WebServer, engine: MidiEngine, config: Config,
     # to it: a no-WiFi registration gets the full plugin API and
     # simply has no /api/wifi routes.
     register_wifi(ctx)
+    register_osc(ctx)
     register_plugins(ctx)

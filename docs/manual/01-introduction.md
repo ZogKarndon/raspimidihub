@@ -26,7 +26,7 @@ tap-to-play surface the matrix routes like any other device.
 
 ### Appliance reliability
 
-Read-only filesystem, captive-portal access point, power-pull-safe
+Read-only filesystem, Ethernet-only networking, power-pull-safe
 config writes, an isolated CPU core for the MIDI path. Treat the Pi
 like a guitar pedal: yank the power, plug it back in next week, it
 boots to the same state.

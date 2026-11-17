@@ -101,8 +101,8 @@ The user-facing URL stays stable:
 1. Open Raspberry Pi Imager → ⚙ Settings → **Use custom repository** and paste:
    `https://raw.githubusercontent.com/wamdam/raspimidihub/main/image/os-list.json`
 2. Pick **RaspiMIDIHub OS**.
-3. Click **Customize** (or wait for the wizard prompt) — set WiFi credentials,
-   keyboard layout, hostname, SSH if wanted.
+3. Click **Customize** (or wait for the wizard prompt) — leave Wi-Fi empty,
+   set keyboard layout, hostname, SSH if wanted. Plug in Ethernet before boot.
 4. Flash. Boot the Pi.
 5. Watch the green ACT LED (next to the SD slot):
 
@@ -117,10 +117,10 @@ The user-facing URL stays stable:
    After reboot the LED resumes normal appliance behavior (steady, flickers on
    MIDI activity).
 
-6. Connect to `RaspiMIDIHub-XXXX` WiFi (password `midihub1`).
+6. Open `http://raspimidihub-<id>.local` from a machine on the same Ethernet network.
 
-**Internet is required on first boot.** Either plug in ethernet, USB-tether a
-phone, or pre-configure WiFi credentials in the Pi Imager wizard.
+**Internet is required on first boot.** Plug in Ethernet, or USB-tether a phone.
+Wi-Fi is not used.
 
 ## Testing
 

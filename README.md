@@ -4,7 +4,7 @@
 
 Plug in your keyboards, synths, drum machines, and controllers -- they appear in a routing matrix instantly. Connect any two with a tap, or flip on all-to-all routing for classic plug-and-play. No computer needed; everything is configured from your phone.
 
-With the built-in plugin system, you can add virtual instruments and effects (arpeggiator, LFO, chord generator, and more) that appear as MIDI devices in the routing matrix. Configure everything from your phone -- the Pi creates its own WiFi network with a captive portal.
+With the built-in plugin system, you can add virtual instruments and effects (arpeggiator, LFO, chord generator, and more) that appear as MIDI devices in the routing matrix. Configure everything from a browser on the Ethernet network. The hub speaks OSC on that wire, including discovery of SuperCollider servers.
 
 The Raspberry Pi runs on a **read-only filesystem**, so you can pull the power at any time without risk of SD card corruption.
 
@@ -145,15 +145,15 @@ The shipped **[User Manual](https://github.com/wamdam/raspimidihub/releases/late
 - **Test without 2.0 hardware** -- `scripts/fake_midi2_synth.py` is a virtual MIDI 2.0 device (UMP endpoint, hi-res sweeps, MIDI-CI responder)
 
 ### Connectivity
-- **Built-in WiFi access point** -- connect from your phone, captive portal opens automatically
-- **WiFi mode preference** -- AP only / WiFi for updates / WiFi always (Settings)
-- **USB tethering** -- plug a phone into a USB-A port, Settings shows the tethered URL as a clickable link (Pi gets internet for updates without flipping wlan0)
-- **Software Updates** -- Settings card auto-downloads newer GitHub releases, keeps the latest 3, installs offline with one tap
-- **Auto-fallback** -- if WiFi client mode is lost, reverts to AP mode within ~90 seconds
+- **Ethernet only** -- no Wi-Fi access point or client. Open `http://raspimidihub-<id>.local` from the wired network
+- **OSC** -- MIDI routed to the OSC device is sent as `/midi/…` messages; inbound OSC comes back as MIDI
+- **SuperCollider discovery** -- `/status` probes on Ethernet and USB Ethernet (a second Pi on a USB gadget link). Servers bound to 127.0.0.1 are not visible; see the manual
+- **USB tethering** -- plug a phone into a USB-A port, Settings shows the tethered URL as a clickable link (Pi gets internet for updates)
+- **Software Updates** -- Settings card auto-downloads newer GitHub releases when Ethernet can reach GitHub, keeps the latest 3, installs offline with one tap
 - **Progressive Web App (PWA)** -- install to home screen for app-like experience
 - **Mobile-first touch UI** designed for live performance
 - **Real-time sync** across multiple browsers via SSE; per-view subscriptions keep traffic minimal
-- **mDNS** -- reachable at `http://raspimidihub-<id>.local` (unique per hub; `<id>` is the code shown in the title bar / WiFi name). The bare `raspimidihub.local` no longer resolves
+- **mDNS** -- reachable at `http://raspimidihub-<id>.local` (unique per hub; `<id>` is the code shown in the title bar). The bare `raspimidihub.local` no longer resolves
 
 ### Appliance Reliability
 - **Read-only filesystem** -- SD card never written during normal operation
@@ -173,7 +173,7 @@ The shipped **[User Manual](https://github.com/wamdam/raspimidihub/releases/late
 - Raspberry Pi 4B or 5 (recommended) -- 3B+ and Zero 2 W also work, but their USB 2.0 buses may drop notes under load
 - microSD card (4 GB+)
 - USB MIDI devices
-- **Internet on first boot** — ethernet, USB-tethered phone, or WiFi credentials set in the Pi Imager wizard
+- **Internet on first boot** — Ethernet, or a USB-tethered phone. Wi-Fi is not used
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (free, official Raspberry Pi flashing tool)
 
 ### Installation — flash the bootstrap image (recommended)
@@ -183,11 +183,11 @@ The fastest path: flash one image with [Raspberry Pi Imager](https://www.raspber
 1. **Download the image**: [`raspimidihub-bootstrap-2026-04-21.img.xz`](https://github.com/wamdam/raspimidihub/releases/download/image-2026-04-21/raspimidihub-bootstrap-2026-04-21.img.xz) (~535 MB) from the [image release](https://github.com/wamdam/raspimidihub/releases/tag/image-2026-04-21).
 2. Open **Raspberry Pi Imager**, click **CHOOSE OS** → scroll to the bottom → **Use custom**, then select the `.img.xz` file.
 3. Click **CHOOSE STORAGE**, pick your SD card, **NEXT**. Pi Imager asks "would you like to apply OS customisation settings?" — click **EDIT SETTINGS**:
-   - **WiFi SSID + password + country** (or skip if you'll use ethernet)
+   - Leave Wi-Fi empty. Plug in Ethernet before first boot (the installer downloads the package)
    - **Keyboard layout** + locale + timezone
    - **Username + password**, and paste an SSH public key if you want passwordless SSH later
-4. **Save** → **YES** → **YES** to write. Insert SD into the Pi, plug in power.
-5. Wait roughly **5 minutes**. The green ACT LED progresses heartbeat → medium blink → fast blink → solid → reboot → steady-on. When it settles to steady, the appliance is up and the access point is broadcasting `RaspiMIDIHub-XXXX`.
+4. **Save** → **YES** → **YES** to write. Insert SD into the Pi, plug in Ethernet and power.
+5. Wait roughly **5 minutes**. The green ACT LED progresses heartbeat → medium blink → fast blink → solid → reboot → steady-on. When it settles to steady, the appliance is up on the wired network.
 
 The image is just a fresh Raspberry Pi OS Lite (64-bit) + a oneshot that downloads and installs the latest RaspiMIDIHub release on first boot. Re-flashing the same image any time gives you the newest release — no separate image per code release.
 
@@ -227,16 +227,15 @@ sudo reboot
 > **Warning:** Install on a **fresh Raspberry Pi OS Lite** image only. The `raspimidihub-rosetup` package converts the filesystem to read-only and may conflict with other software. Do not install on a Pi you use for other purposes.
 </details>
 
-After the install reboot, the Pi runs with a read-only filesystem and all connected MIDI devices are automatically routed. The WiFi AP starts automatically.
+After the install reboot, the Pi runs with a read-only filesystem and all connected MIDI devices are automatically routed. Wi-Fi stays off.
 
 ### Connecting
 
-1. On your phone, go to WiFi settings
-2. Connect to `RaspiMIDIHub-XXXX` (default password: `midihub1`)
-3. The configuration page opens automatically (captive portal)
-4. Tap a matrix cell to open its menu (Edit, Copy, Paste, Remove); pick **Edit** to set filters and mappings
-5. Tap **Add** at the bottom of the matrix to add plugins or controllers
-6. Hit **Save Config** to persist across reboots
+1. From a computer on the same Ethernet network, open `http://raspimidihub-<id>.local` (`<id>` is the code in the title bar)
+2. Tap a matrix cell to open its menu (Edit, Copy, Paste, Remove); pick **Edit** to set filters and mappings
+3. Tap **Add** at the bottom of the matrix to add plugins or controllers
+4. Hit **Save Config** to persist across reboots
+5. **Settings → Network** shows OSC and any SuperCollider server the cable (or a USB Ethernet link) can see
 
 ---
 
@@ -289,7 +288,7 @@ RaspiMIDIHub consists of two Debian packages:
 
 | Package | Purpose |
 |---------|---------|
-| `raspimidihub` | MIDI routing service + plugin host + web UI + WiFi AP |
+| `raspimidihub` | MIDI routing service + plugin host + web UI + OSC |
 | `raspimidihub-rosetup` | Read-only filesystem hardening (optional but recommended) |
 
 MIDI routing uses the Linux ALSA sequencer at the kernel level via ctypes bindings to libasound2, adding virtually zero latency for direct connections. Filtered and mapped connections route through userspace with ~1-3ms latency. Plugins run as virtual ALSA MIDI devices with their own input and output ports.
@@ -300,21 +299,21 @@ The web UI is a Preact SPA served by a Python stdlib async HTTP server -- no bui
 
 ## Maintenance
 
-### Resetting WiFi to Access Point
+### Blocking Wi-Fi
 
 ```bash
 sudo reset-wifi
 ```
 
+Turns the Wi-Fi radio off and removes saved Wi-Fi profiles. The hub stays on Ethernet.
+
 ### Updating
 
-The Pi is in AP mode by default and the AP has no internet, so updates need a way out. Pick whichever path is convenient — the **Settings > Software Update** card just needs the Pi to reach GitHub once; it auto-detects which of these is available. The newest 3 debs are kept on disk so re-installs work fully offline.
+**Settings > Update** needs the wired network to reach GitHub. The newest 3 debs are kept on disk so re-installs work fully offline.
 
-**Ethernet** -- simplest. Plug a cable into the Pi, hit Install. The access point stays up the whole time; your phone/laptop connection to the Pi is unaffected. Recommended for headless setups.
+**Ethernet** -- plug in a cable, hit Check. This is the path to use.
 
-**USB tethering** -- plug a phone into one of the Pi's USB-A ports with Personal Hotspot / USB Tethering enabled. The kernel brings up a `usb0` / `enx…` interface and the phone hands the Pi an IP. The Settings page shows the tethered URL as a clickable link so you can switch your browser to the faster link, but you don't have to — the AP stays up either way. Works on iOS and Android.
-
-**WiFi** -- the Pi has only one wireless radio, so going online over WiFi means temporarily dropping the AP. Set **Settings > Connectivity > WiFi mode** to **WiFi for updates** and save your home network's SSID/password. When you hit Install, the Pi briefly switches `wlan0` from AP to client, downloads the deb, then switches back. Your phone/laptop will lose its connection to the Pi for ~30 seconds during the switch and again on the way back; reconnect to the AP afterwards. A 180-second watchdog force-restarts the service if anything hangs in client mode, so the AP always comes back even if the update step fails.
+**USB tethering** -- plug a phone into one of the Pi's USB-A ports with Personal Hotspot / USB Tethering enabled. The kernel brings up a `usb0` / `enx…` interface and the phone hands the Pi an IP. The Settings page shows the tethered URL as a clickable link. Works on iOS and Android.
 
 Once the deb is on disk, Install applies it offline regardless of which path fetched it.
 

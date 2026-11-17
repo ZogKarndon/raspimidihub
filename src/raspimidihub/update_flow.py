@@ -1,30 +1,11 @@
-"""Update fetch orchestrator for Phase 5.5.
+"""Update fetch orchestrator.
 
-The Pi runs in AP mode by default so phones/laptops can reach it
-without infrastructure. To fetch new releases from GitHub it has
-to talk to the public internet, which the AP can't do. This module
-handles "go online for as little time as possible, then come back".
-
-Two paths, decided per call by `probe_internet`:
-
-  a) The current network already has internet (e.g. ethernet plugged
-     in, or someone selected "WiFi always"). Just use it.
-
-  b) The current network has no internet. If the user opted into
-     "WiFi for updates" AND saved credentials, briefly switch to
-     client mode, do the work, switch back to AP. Otherwise surface
-     an actionable error.
-
-Independent of the orchestrator path, a `systemd-run --on-active=180s`
-watchdog is scheduled before any WiFi switch. If the orchestrator
-hangs in client mode the watchdog forces a service restart, which
-brings the AP back unconditionally — so the user never loses access
-to their phone-reachable Pi due to a buggy update step.
+The hub is Ethernet-only. An update runs when the wired network
+(or a USB-tethered phone) can already reach GitHub. There is no
+Wi-Fi client switch and no access-point restore.
 
 State is exposed via `/run/raspimidihub/update-status` (JSON). The
-UI polls it. Each step writes a breadcrumb so progress AND post-
-mortem are precise: "joining-wifi" / "downloading" / "error-no-creds"
-beat a generic spinner.
+UI polls it. Each step writes a breadcrumb so progress is precise.
 
 Storage: `/var/lib/raspimidihub/updates/` keeps deb + sibling
 `.changelog.md` files. Newest 3 retained; older pruned per call.
@@ -354,10 +335,9 @@ def prune_stored(keep: int = KEEP_VERSIONS,
 # --- Watchdog -------------------------------------------------------------
 
 def schedule_watchdog(reason: str) -> bool:
-    """Run a transient systemd-run unit that fires in WATCHDOG_SECONDS,
-    forcing the Pi back to AP. Cancelled via cancel_watchdog() once the
-    orchestrator returns to AP cleanly. Survives even if our service
-    crashes mid-flow, which is the whole point."""
+    """Schedule the update watchdog unit. The Ethernet-only orchestrator
+    does not call this: there is no Wi-Fi mode to fall back from. Kept
+    so a console can still arm the same restart."""
     cmd = [
         "systemd-run",
         "--unit=raspimidihub-update-watchdog",
@@ -458,17 +438,11 @@ class NoInternetError(Exception):
 
 
 class UpdateFetcher:
-    """Wraps a callable in 'be online for it' logic.
+    """Run an async callable once the wired network can reach GitHub.
 
-    Three shapes:
-      a) current-net works → run callable → done.
-      b) current-net broken, mode == ap_only → NoInternetError.
-      c) current-net broken, no creds → NoInternetError.
-      d) current-net broken, mode == wifi_for_updates, creds present →
-         switch to client → run callable → switch back to AP.
-
-    The callable is async, takes no args, and may itself write status
-    breadcrumbs via write_status (e.g. for per-deb download progress)."""
+    `wifi_manager` is accepted and ignored so older callers keep
+    working. The hub does not switch radios.
+    """
 
     def __init__(self, wifi_manager, config) -> None:
         self.wifi = wifi_manager
@@ -476,13 +450,11 @@ class UpdateFetcher:
 
     async def run(self, work: Callable[[], Awaitable[Any]],
                   *, version_label: str = "") -> Any:
-        """Execute `work` while ensuring internet access. Returns whatever
-        `work` returns. Raises NoInternetError if no path to GitHub."""
+        """Execute `work` when Ethernet (or USB tethering) has internet.
+        Raises NoInternetError otherwise."""
         loop = asyncio.get_running_loop()
-        log.info("UpdateFetcher.run start (label=%s, current wifi mode=%s, "
-                 "wifi_mode_pref=%s)",
-                 version_label or "-", self.wifi.mode,
-                 self.config.wifi.get("wifi_mode_pref", "ap_only"))
+        log.info("UpdateFetcher.run start (label=%s) — ethernet only",
+                 version_label or "-")
         write_status({"step": "probing", "version": version_label})
 
         # Bootstrap the system clock before TLS. The Pi has no RTC and
@@ -490,159 +462,34 @@ class UpdateFetcher:
         # is stuck at last-shutdown. TLS to api.github.com would then
         # fail with "certificate not yet valid". HTTP HEAD (no TLS)
         # to a known time-emitting host fixes that. No-op if drift is
-        # < 60 s. Cheap (~50 ms) so it runs every probe — same path
-        # serves cabled and tethered scenarios.
+        # < 60 s.
         await loop.run_in_executor(None, sync_clock_from_http)
 
         if await loop.run_in_executor(None, probe_internet):
-            log.info("Path: current network has internet — no WiFi switch")
-            return await self._run_work(work, switched=False,
-                                         version_label=version_label)
+            log.info("Path: wired network has internet")
+            return await self._run_work(work, version_label=version_label)
 
-        wifi_pref = self.config.wifi.get("wifi_mode_pref", "ap_only")
-        saved_ssid = self.config.wifi.get("client_ssid", "")
-        saved_password = self.config.wifi.get("client_password", "")
+        msg = ("No internet on the wired connection. Plug in Ethernet "
+               "or a USB-tethered phone and try again. This hub does "
+               "not use Wi-Fi.")
+        log.warning("Path: aborting — no internet on Ethernet")
+        self._abort("error-no-internet", msg)
+        raise NoInternetError(msg)
 
-        if wifi_pref != "wifi_for_updates" or not saved_ssid:
-            msg = self._explain_no_internet(wifi_pref, saved_ssid)
-            log.warning("Path: aborting — no internet route available "
-                        "(wifi_mode_pref=%s, saved_ssid=%r)",
-                        wifi_pref, saved_ssid)
-            self._abort("error-no-internet", msg)
-            raise NoInternetError(msg)
-
-        log.info("Path: transient WiFi switch to '%s' for the fetch", saved_ssid)
-        schedule_watchdog("transient-update")
-        try:
-            return await self._transient_wifi_path(
-                work, saved_ssid, saved_password, version_label)
-        finally:
-            # The watchdog's whole purpose is to recover when we fail to
-            # get back to AP. Only disarm it if we *are* back in AP mode;
-            # otherwise let it fire and force a service restart. Pre-fix
-            # we unconditionally cancelled it here, so a single nmcli
-            # timeout in start_client could strand the Pi in client mode
-            # with no recovery short of a reboot.
-            if getattr(self.wifi, "mode", None) == "ap":
-                cancel_watchdog()
-            else:
-                log.warning("Leaving watchdog armed — wifi.mode=%r "
-                            "(expected 'ap' after orchestrator exit)",
-                            getattr(self.wifi, "mode", None))
-
-    async def _run_work(self, work, *, switched: bool, version_label: str):
-        """Run the user's callable, handle the AP restoration, and write
-        the final 'done' status afterwards. The work callable should NOT
-        itself write 'done' — only progress/error breadcrumbs — because
-        on the WiFi-switched path we still need to flip back to AP
-        before the flow is truly finished, and the UI watches for the
-        'done' step to clear its spinner."""
+    async def _run_work(self, work, *, version_label: str):
+        """Run the callable and write the terminal 'done' status the UI
+        matches on to clear its spinner."""
         result = None
         try:
             result = await work()
             return result
         finally:
-            if switched:
-                log.info("Switching back to AP after work")
-                write_status({"step": "switching-to-ap",
-                              "version": version_label})
-                await self._switch_to_ap()
-            # Replace the transient last-step (switching-to-ap, or
-            # whatever progress write the work left in place) with a
-            # terminal 'done' the UI can match on.
             done = {"step": "done", "version": version_label}
             if isinstance(result, dict):
                 done.update({k: v for k, v in result.items()
                              if k in ("newly_downloaded", "pruned")})
             log.info("UpdateFetcher.run done: %s", done)
             write_status(done)
-
-    async def _transient_wifi_path(self, work, ssid: str, password: str,
-                                    version_label: str):
-        loop = asyncio.get_running_loop()
-        log.info("Switching to client mode (SSID=%s)", ssid)
-        write_status({"step": "switching-to-client", "version": version_label,
-                      "ssid": ssid})
-        wifi_cfg = self.config.wifi
-        ap_ssid = wifi_cfg.get("ap_ssid", "")
-        ap_password = wifi_cfg.get("ap_password", "midihub1")
-
-        try:
-            await self.wifi.start_client_with_fallback(
-                ssid, password, ap_ssid, ap_password)
-        except Exception as e:
-            log.error("WiFi association raised: %s", e)
-            # start_client_with_fallback is *supposed* to leave us back
-            # in AP mode on any failure, but if it itself crashed, the
-            # Pi may still be wedged in client/unknown mode. Make a
-            # last-ditch effort here so the watchdog isn't the only
-            # path back to AP.
-            if getattr(self.wifi, "mode", None) != "ap":
-                await self._switch_to_ap()
-            self._abort("error-wifi-assoc",
-                        f"Failed to switch to WiFi: {e}")
-            raise NoInternetError(f"Failed to switch to WiFi: {e}") from e
-
-        if self.wifi.mode != "client":
-            log.warning("Couldn't join '%s' — wifi_manager.mode is %s",
-                        ssid, self.wifi.mode)
-            msg = (f"Couldn't join '{ssid}'. Check the saved password "
-                   f"and that the network is in range.")
-            self._abort("error-wifi-assoc", msg)
-            raise NoInternetError(msg)
-
-        log.info("Joined '%s' (IP=%s) — verifying internet via WiFi",
-                 ssid, self.wifi.ip)
-        write_status({"step": "verifying-internet", "version": version_label,
-                      "ssid": ssid})
-        # Sync the clock before the HTTPS probe — see UpdateFetcher.run
-        # for why. Especially relevant on this path: the Pi has just
-        # come up from AP-mode (no internet), so this might be the
-        # first time it can reach a Date-emitting host.
-        await loop.run_in_executor(None, sync_clock_from_http)
-        # start_client_with_fallback already waits for an IP. Re-probe to
-        # confirm internet is actually reachable via the new connection
-        # (joining a captive portal or a router with no WAN would otherwise
-        # silently dump us into a "downloading…" that just hangs).
-        reachable = await loop.run_in_executor(None, probe_internet)
-        if not reachable:
-            log.warning("'%s' joined but no internet — switching back to AP",
-                        ssid)
-            await self._switch_to_ap()
-            msg = (f"Joined '{ssid}' but no internet — check the "
-                   "network's router has internet access.")
-            self._abort("error-no-internet-on-wifi", msg)
-            raise NoInternetError(msg)
-
-        log.info("Internet reachable via '%s' — running work callable", ssid)
-        return await self._run_work(work, switched=True,
-                                     version_label=version_label)
-
-    async def _switch_to_ap(self) -> None:
-        wifi_cfg = self.config.wifi
-        loop = asyncio.get_running_loop()
-        try:
-            await loop.run_in_executor(
-                None, self.wifi.start_ap,
-                wifi_cfg.get("ap_ssid", ""),
-                wifi_cfg.get("ap_password", "midihub1"),
-                wifi_cfg.get("ap_band", "2.4"),
-                wifi_cfg.get("ap_country", ""),
-            )
-        except Exception:
-            log.exception("failed to return to AP mode (watchdog will retry)")
-
-    def _explain_no_internet(self, pref: str, saved_ssid: str) -> str:
-        if pref == "ap_only":
-            return ("No internet on the current connection, and the WiFi "
-                    "mode is set to 'AP only'. Plug in ethernet, or set "
-                    "WiFi to 'WiFi for updates' and save credentials.")
-        if not saved_ssid:
-            return ("No internet on the current connection, and no WiFi "
-                    "credentials are saved. Save credentials in the WiFi "
-                    "card or plug in ethernet.")
-        return ("No internet on the current connection. Plug in ethernet "
-                "or set WiFi to 'WiFi for updates'.")
 
     def _abort(self, step: str, message: str) -> None:
         write_status({"step": step, "message": message})

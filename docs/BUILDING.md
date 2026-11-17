@@ -153,7 +153,9 @@ raspimidihub/
 │   ├── midi_engine.py       # MIDI routing engine
 │   ├── midi_filter.py       # Filtering + mapping engine
 │   ├── web.py               # Async HTTP server (stdlib only)
-│   ├── wifi.py              # WiFi AP/client management
+│   ├── wifi.py              # Ethernet helpers; Wi-Fi manager is legacy and not started
+│   ├── osc.py               # OSC 1.0 codec and MIDI message map
+│   ├── osc_transport.py     # Ethernet OSC socket and SuperCollider probes
 │   └── static/              # Web UI (Preact SPA, no build step)
 │       ├── index.html
 │       ├── app.js

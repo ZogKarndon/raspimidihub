@@ -78,8 +78,8 @@ function NetworkCard({ iface, showToast, reload }) {
 // Tiny "we're alive" indicator: a single dot hops along five
 // positions, advancing one slot on every poll. Colour reflects the
 // most recent poll's outcome — green when polls are getting through,
-// red when they're failing (e.g. AP outage with the user's phone on
-// a different WiFi). When polling stops, the dot stops with it, so
+// red when they're failing (the browser lost the Pi). When polling
+// stops, the dot stops with it, so
 // the user can tell at a glance whether anything's happening.
 //
 // Implementation note: all five dots use the same background colour;
@@ -105,14 +105,10 @@ function PollIndicator({ tick, ok }) {
     `;
 }
 
-// Phase 5.5 update flow:
-//   - the Pi normally lives in AP mode so phones can reach it
-//   - to fetch a new release it has to talk to the public internet,
-//     which the AP can't do. POST /system/check-update orchestrates
-//     a transient WiFi switch (or stays put if ethernet works).
-//   - downloads land in /var/lib/raspimidihub/updates/ as deb files
-//     plus sibling .changelog.md files. GET /system/versions returns
-//     the list. POST /system/install installs a chosen one.
+// Update flow. The hub is Ethernet-only: a check runs when the cable
+// (or a USB-tethered phone) can already reach GitHub. Downloads land
+// in /var/lib/raspimidihub/updates/ as deb files plus sibling
+// .changelog.md files.
 function VersionsCard({ showToast, onUpdatingChange }) {
     const [versions, setVersions] = useState(null);  // {running, stored: [...]}
     const [checking, setChecking] = useState(false);
@@ -144,14 +140,9 @@ function VersionsCard({ showToast, onUpdatingChange }) {
     useEffect(() => { refresh(); }, []);
 
     // Watch the orchestrator's status file while a check or install
-    // runs. The orchestrator runs as a backgrounded asyncio task on
-    // the server; the AP may go down mid-flow when we switch to WiFi
-    // client mode. Poll fetches that fail (TypeError on phones when
-    // the AP drops) are silently absorbed in the short term — but if
-    // they keep failing past STALL_TIMEOUT_MS, the user's phone has
-    // probably auto-reconnected to a different saved network and won't
-    // come back to the Pi's AP on its own. Surface a help message
-    // telling them to reconnect + reload.
+    // runs. The orchestrator is a background task. If polls fail past
+    // STALL_TIMEOUT_MS the browser has lost the Pi (cable, or the
+    // phone dropped the tether). Say so.
     //
     // For an install we also detect the running-version flip, which
     // is the unambiguous "the new deb is live" signal.
@@ -180,10 +171,8 @@ function VersionsCard({ showToast, onUpdatingChange }) {
                 if (!stalled && Date.now() - lastSuccessAt > STALL_TIMEOUT_MS) {
                     stalled = true;
                     setStatusErr(
-                        "Can't reach the Pi. The update probably finished, " +
-                        "but your phone reconnected to a different WiFi " +
-                        "network. Reconnect to the Pi's AP " +
-                        "(RaspiMIDIHub-…) and reload this page.");
+                        "Can't reach the Pi. Check the Ethernet cable " +
+                        "(or the USB tether) and reload this page.");
                     setStatusMsg('');
                 }
                 return;
@@ -232,11 +221,8 @@ function VersionsCard({ showToast, onUpdatingChange }) {
         setUpdatingFlag(true);
         const startVersion = versions ? versions.running : null;
         const pollId = pollStatus('check', startVersion);
-        // Server kicks off the orchestrator as a background task and
-        // returns "started" immediately — by design, because the AP
-        // may go down once it switches to WiFi client mode and a
-        // long-held HTTP request would die from the phone's side.
-        // The poll loop above carries us through the outage.
+        // The server starts the check in the background and returns
+        // immediately. The poll loop above follows it.
         let res;
         try {
             res = await fetch('/api/system/check-update', {
@@ -370,454 +356,93 @@ function VersionsCard({ showToast, onUpdatingChange }) {
     `;
 }
 
-// Consolidated WiFi card (rebuilt from the older multi-button version).
-//
-// State the user can change:
-//   - wifi_mode_pref: ap_only / wifi_for_updates / wifi_always
-//   - home WiFi credentials (SSID + password) — data only, no live impact
-//   - AP password — propagates to hostapd without flipping modes
-//
-// Mode-pref radio is the only thing that drives the live wlan0 state, and
-// it requires explicit Apply (Discard / Apply buttons appear only when
-// dirty). Apply is backgrounded server-side because switching to client
-// mode tears down the AP and would kill the held-open HTTP request from
-// a phone — same pattern as POST /api/system/check-update.
-function WiFiCard({ showToast }) {
-    const [wifi, setWifi] = useState(null);
-    const [pendingPref, setPendingPref] = useState(null);
-    const [editing, setEditing] = useState(null); // null | 'home-wifi' | 'ap-password'
-    const [applying, setApplying] = useState(false);
+// OSC over Ethernet, plus SuperCollider servers found with /status.
+function OscCard({ showToast }) {
+    const [info, setInfo] = useState(null);
+    const [peer, setPeer] = useState('');
+    const reload = useCallback(() => {
+        api('/osc').then(setInfo).catch(() => {});
+    }, []);
+    useEffect(() => {
+        reload();
+        const t = setInterval(reload, 3000);
+        return () => clearInterval(t);
+    }, [reload]);
 
-    const refresh = () => api('/wifi').then(w => {
-        setWifi(w);
-        setPendingPref(null);
-    }).catch(() => {});
-    useEffect(() => { refresh(); }, []);
-
-    if (!wifi) {
-        return html`<div class="card"><h3>WiFi</h3><p style="color:var(--text-dim)">Loading...</p></div>`;
-    }
-
-    const isAp = wifi.mode === 'ap';
-    const hasCreds = !!wifi.saved_client_ssid;
-    const savedPref = wifi.wifi_mode_pref;
-    const dirty = pendingPref !== null && pendingPref !== savedPref;
-    const targetPref = pendingPref ?? savedPref;
-
-    // Apply button label tells the user what's actually about to happen,
-    // so clicking Apply never surprises. Four cases:
-    //   targetPref==wifi_always + currently AP → "Switch to home WiFi now"
-    //   targetPref!=wifi_always + currently client → "Stop client, start AP"
-    //   else → "Save (no mode change)"
-    let applyLabel = 'Save';
-    if (dirty) {
-        if (targetPref === 'wifi_always' && isAp) applyLabel = 'Switch to home WiFi now';
-        else if (targetPref !== 'wifi_always' && !isAp) applyLabel = 'Stop WiFi client, start AP';
-        else applyLabel = 'Save mode';
-    }
-
-    const apply = async () => {
-        setApplying(true);
-        const res = await api('/wifi/apply-mode', {
-            method: 'POST', body: JSON.stringify({ pref: targetPref }),
-        });
-        setApplying(false);
-        if (res.error) {
-            showToast('Apply failed: ' + res.error);
-            return;
-        }
-        showToast(res.switched ? 'Applying mode change...' : 'Mode saved');
-        // Poll /api/wifi a couple of times if a switch was triggered, so
-        // the displayed mode catches up. Otherwise just refresh once.
-        if (res.switched) {
-            setTimeout(refresh, 1500);
-            setTimeout(refresh, 4000);
-        } else {
-            refresh();
-        }
+    const save = async (patch) => {
+        const res = await api('/osc/settings', {
+            method: 'POST', body: JSON.stringify(patch) });
+        if (res.error) { showToast(res.error); return; }
+        setInfo(res);
     };
 
-    const ModeRadio = ({ value, label, sub, requiresCreds }) => {
-        const disabled = requiresCreds && !hasCreds;
-        return html`
-            <label data-testid=${'mode-' + value}
-                style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;cursor:${disabled ? 'not-allowed' : 'pointer'};opacity:${disabled ? 0.5 : 1}">
-                <input type="radio" name="wifi-mode-pref" style="margin-top:3px"
-                    checked=${targetPref === value}
-                    disabled=${disabled || applying}
-                    onChange=${() => setPendingPref(value)} />
-                <span style="flex:1">
-                    <div style="font-size:13px;font-weight:500">${label}</div>
-                    <div style="font-size:11px;color:var(--text-dim)">${sub}</div>
-                </span>
+    if (!info) {
+        return html`<div class="card"><h3>OSC</h3><p style="color:var(--text-dim)">Loading…</p></div>`;
+    }
+    if (info.available === false) {
+        return html`<div class="card"><h3>OSC</h3><p>${info.reason || 'unavailable'}</p></div>`;
+    }
+    const servers = info.servers || [];
+    return html`
+        <div class="card" data-testid="osc-card">
+            <h3>OSC <span style="color:var(--text-dim);font-size:11px;font-weight:400">UDP ${info.listen_port}</span></h3>
+            <p style="font-size:12px;color:var(--text-dim);margin-top:0">
+                MIDI routed into the <b>OSC</b> device leaves as <code>/midi/note_on</code> and the other <code>/midi/…</code> messages.
+                Incoming OSC becomes MIDI on that device's OUT port.
+            </p>
+            <label class="msg-toggle">
+                <input type="checkbox" data-testid="osc-enabled" checked=${!!info.enabled}
+                    onchange=${e => save({ enabled: e.target.checked })} />
+                <span>Speak OSC on Ethernet</span>
             </label>
-        `;
-    };
-
-    return html`
-        <div class="card">
-            <h3>WiFi</h3>
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px;background:var(--bg);border-radius:6px">
-                <span style="font-size:20px">${isAp ? '📡' : '🔗'}</span>
-                <div style="flex:1">
-                    <div style="font-size:15px;font-weight:600">${isAp ? 'Access Point' : 'Client'}: ${wifi.ssid || '-'}</div>
-                    <div style="font-size:12px;color:var(--text-dim)">${wifi.ip || 'No IP'}</div>
-                </div>
-                <span style="font-size:11px;padding:3px 8px;border-radius:4px;font-weight:600;${isAp
-                    ? 'background:var(--accent2);color:#fff'
-                    : 'background:var(--success);color:#fff'}">${isAp ? 'AP' : 'WiFi'}</span>
+            ${info.error ? html`<p style="color:var(--danger);font-size:12px">${info.error}</p>` : null}
+            <div style="font-size:12px;margin:10px 0 6px">
+                Sending to ${info.resolved_target
+                    ? html`<b>${info.resolved_target}</b>`
+                    : html`<span style="color:var(--text-dim)">nowhere yet — pick a server or add a peer</span>`}
             </div>
-
-            <div data-testid="wifi-mode-pref" style="margin-bottom:14px">
-                <div style="font-size:13px;color:var(--text-dim);margin-bottom:4px">
-                    Network mode${dirty ? html` <span style="color:var(--warn)">unsaved ●</span>` : ''}
-                </div>
-                <${ModeRadio} value="ap_only" label="AP only"
-                    sub="Pi is its own WiFi network. Phones connect to it." />
-                <${ModeRadio} value="wifi_for_updates" label="WiFi for updates"
-                    sub=${hasCreds
-                        ? "Joins home WiFi briefly when fetching releases, then back to AP."
-                        : "(set home WiFi below to enable)"}
-                    requiresCreds=${true} />
-                <${ModeRadio} value="wifi_always" label="WiFi always"
-                    sub=${hasCreds
-                        ? "Pi joins home WiFi permanently. No AP."
-                        : "(set home WiFi below to enable)"}
-                    requiresCreds=${true} />
-            </div>
-
-            ${dirty && html`
-                <div class="btn-group" style="margin-bottom:12px">
-                    <button class="btn btn-secondary" onclick=${() => setPendingPref(null)} disabled=${applying}>
-                        Discard
-                    </button>
-                    <button class="btn btn-primary" data-testid="apply-mode"
-                        onclick=${apply} disabled=${applying}>
-                        ${applying ? 'Applying...' : applyLabel}
-                    </button>
-                </div>
-            `}
-
-            <div style="border-top:1px solid var(--surface2);padding-top:10px">
-                <${ConfigRow} label="Home WiFi"
-                    value=${wifi.saved_client_ssid || html`<span style="color:var(--text-dim)">not configured</span>`}
-                    buttonLabel=${hasCreds ? 'Edit' : 'Set'}
-                    testId="edit-home-wifi"
-                    onClick=${() => setEditing('home-wifi')} />
-                <${ConfigRow} label="AP password" value=${'•'.repeat(8)}
-                    buttonLabel="Edit"
-                    testId="edit-ap-password"
-                    onClick=${() => setEditing('ap-password')} />
-                <${ConfigRow} label="AP radio"
-                    value=${html`${wifi.ap_band === '5' ? '5 GHz' : '2.4 GHz'} · ${
-                        wifi.ap_country
-                            ? wifi.ap_country
-                            : html`<span style="color:var(--text-dim)">${wifi.resolved_country || '—'} (auto)</span>`}`}
-                    buttonLabel="Edit"
-                    testId="edit-ap-radio"
-                    onClick=${() => setEditing('ap-radio')} />
-            </div>
-
-            ${editing === 'home-wifi' && html`
-                <${HomeWiFiModal} wifi=${wifi} showToast=${showToast}
-                    onClose=${() => setEditing(null)}
-                    onSaved=${() => { setEditing(null); refresh(); }} />
-            `}
-            ${editing === 'ap-password' && html`
-                <${APPasswordModal} showToast=${showToast}
-                    onClose=${() => setEditing(null)}
-                    onSaved=${() => { setEditing(null); refresh(); }} />
-            `}
-            ${editing === 'ap-radio' && html`
-                <${APRadioModal} wifi=${wifi} showToast=${showToast}
-                    onClose=${() => setEditing(null)}
-                    onSaved=${() => { setEditing(null); setTimeout(refresh, 1500); setTimeout(refresh, 4000); }} />
-            `}
-        </div>
-    `;
-}
-
-function ConfigRow({ label, value, buttonLabel, testId, onClick }) {
-    return html`
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0">
-            <div style="font-size:13px">
-                <span style="color:var(--text-dim)">${label}:</span>
-                <span style="margin-left:8px">${value}</span>
-            </div>
-            <button class="btn btn-secondary" data-testid=${testId}
-                style="padding:4px 12px;font-size:12px"
-                onclick=${onClick}>${buttonLabel}</button>
-        </div>
-    `;
-}
-
-function HomeWiFiModal({ wifi, showToast, onClose, onSaved }) {
-    const [ssid, setSsid] = useState(wifi.saved_client_ssid || '');
-    const [password, setPassword] = useState('');
-    const [networks, setNetworks] = useState([]);
-    const [scanning, setScanning] = useState(false);
-    const [busy, setBusy] = useState(false);
-    // Two input modes: pick from the live scan (dropdown), or type the
-    // SSID manually (text input). Pick is the default; manual is the
-    // escape hatch for hidden / out-of-range networks. We open in
-    // manual mode if there's a saved SSID that the current scan doesn't
-    // see — so the user always sees their saved value, never a blank.
-    const [manualEntry, setManualEntry] = useState(false);
-
-    const scan = async () => {
-        setScanning(true);
-        const nets = await api('/wifi/scan');
-        setNetworks(nets || []);
-        setScanning(false);
-        // After scan finishes: if the saved SSID isn't visible, open in
-        // manual mode so the user sees the SSID they have rather than
-        // an empty dropdown.
-        if (wifi.saved_client_ssid &&
-            !nets.some(n => n.ssid === wifi.saved_client_ssid)) {
-            setManualEntry(true);
-        }
-    };
-    useEffect(() => { scan(); }, []);
-
-    const save = async () => {
-        if (!ssid) return;
-        setBusy(true);
-        const res = await api('/wifi/credentials', {
-            method: 'POST', body: JSON.stringify({ ssid, password }),
-        });
-        setBusy(false);
-        if (res.error) {
-            showToast('Save failed: ' + res.error);
-            return;
-        }
-        showToast('Home WiFi saved: ' + ssid);
-        onSaved();
-    };
-
-    const forget = async () => {
-        if (!confirm(`Forget home WiFi "${wifi.saved_client_ssid}"?`)) return;
-        setBusy(true);
-        const res = await api('/wifi/credentials', {
-            method: 'POST', body: JSON.stringify({ action: 'forget' }),
-        });
-        setBusy(false);
-        if (res.error) {
-            showToast('Forget failed: ' + res.error);
-            return;
-        }
-        showToast('Home WiFi forgotten');
-        onSaved();
-    };
-
-    // Handle dropdown selection: the magic value '__manual__' switches
-    // to manual entry; anything else is a scan result.
-    const onPick = (e) => {
-        const v = e.target.value;
-        if (v === '__manual__') {
-            setManualEntry(true);
-            // Don't clobber a typed SSID if the user already had one;
-            // they may have switched to manual specifically to keep it.
-        } else {
-            setSsid(v);
-        }
-    };
-
-    return html`
-        <div onclick=${onClose} style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px">
-            <div onclick=${e => e.stopPropagation()} style="background:var(--surface);border-radius:8px;padding:20px;max-width:400px;width:100%;max-height:90vh;overflow-y:auto">
-                <h3>Home WiFi</h3>
-                <div class="form-group">
-                    <label>Network</label>
-                    ${manualEntry ? html`
-                        <input type="text" data-testid="home-wifi-ssid"
-                            value=${ssid} autoFocus
-                            onInput=${e => setSsid(e.target.value)}
-                            placeholder="SSID" />
-                        <button data-testid="home-wifi-back-to-scan"
-                            style="background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;padding:4px 0;margin-top:4px"
-                            onclick=${() => setManualEntry(false)}>
-                            ← Pick from scan
-                        </button>
-                    ` : html`
-                        <div style="display:flex;gap:8px">
-                            <select style="flex:1" data-testid="home-wifi-pick"
-                                value=${ssid}
-                                onChange=${onPick}>
-                                <option value="">${scanning ? 'Scanning...' : 'Pick a network...'}</option>
-                                ${networks.map(n => html`<option value=${n.ssid}>${n.ssid} (${n.signal}%${n.security ? ' ' + n.security : ''})</option>`)}
-                                <option disabled>──────────</option>
-                                <option value="__manual__">Type SSID manually...</option>
-                            </select>
-                            <button class="btn btn-secondary" style="min-width:48px;padding:8px"
-                                onclick=${scan} disabled=${scanning}>${scanning ? '...' : '↻'}</button>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);margin:12px 0 6px">SuperCollider</div>
+            ${servers.length === 0 ? html`
+                <p style="font-size:12px;color:var(--text-dim)">
+                    No server answered <code>/status</code> on port ${info.sc_port}.
+                    scsynth must be started with <code>-B 0.0.0.0</code> (it listens on 127.0.0.1 by default).
+                    A second Pi on USB Ethernet is probed on that link.
+                </p>` : servers.map(s => html`
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+                    <div style="font-size:13px">
+                        <div>${s.host}:${s.port}</div>
+                        <div style="font-size:11px;color:var(--text-dim)">
+                            ${s.synths ?? '–'} synths · ${s.ugens ?? '–'} ugens
+                            ${s.sample_rate ? html` · ${Math.round(s.sample_rate)} Hz` : ''}
                         </div>
-                    `}
-                </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" data-testid="home-wifi-password"
-                        value=${password}
-                        onInput=${e => setPassword(e.target.value)}
-                        placeholder=${wifi.saved_client_ssid ? 'Leave empty to keep current password' : ''} />
-                </div>
-                <div style="display:flex;justify-content:space-between;gap:8px;margin-top:12px">
-                    ${wifi.saved_client_ssid && html`
-                        <button class="btn btn-danger" data-testid="home-wifi-forget"
-                            onclick=${forget} disabled=${busy}>Forget</button>
-                    `}
-                    <div style="flex:1"></div>
-                    <button class="btn btn-secondary" onclick=${onClose} disabled=${busy}>Cancel</button>
-                    <button class="btn btn-primary" data-testid="home-wifi-save"
-                        onclick=${save} disabled=${busy || !ssid}>
-                        ${busy ? 'Saving...' : 'Save'}
-                    </button>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-function APPasswordModal({ showToast, onClose, onSaved }) {
-    const [password, setPassword] = useState('');
-    const [busy, setBusy] = useState(false);
-
-    const save = async () => {
-        if (password.length < 8) {
-            showToast('Password must be at least 8 characters');
-            return;
-        }
-        setBusy(true);
-        const res = await api('/wifi/ap-password', {
-            method: 'POST', body: JSON.stringify({ password }),
-        });
-        setBusy(false);
-        if (res.error) {
-            showToast('Save failed: ' + res.error);
-            return;
-        }
-        showToast('AP password saved');
-        onSaved();
-    };
-
-    return html`
-        <div onclick=${onClose} style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px">
-            <div onclick=${e => e.stopPropagation()} style="background:var(--surface);border-radius:8px;padding:20px;max-width:400px;width:100%;max-height:90vh;overflow-y:auto">
-                <h3>Change AP password</h3>
-                <div class="form-group">
-                    <label>New password (≥ 8 chars)</label>
-                    <input type="password" data-testid="ap-password-input"
-                        value=${password} autoFocus
-                        onInput=${e => setPassword(e.target.value)} />
-                </div>
-                <p style="font-size:11px;color:var(--text-dim);margin-bottom:12px">
-                    Phones already connected stay connected; new ones need the new password.
-                </p>
-                <div style="display:flex;justify-content:flex-end;gap:8px">
-                    <button class="btn btn-secondary" onclick=${onClose} disabled=${busy}>Cancel</button>
-                    <button class="btn btn-primary" data-testid="ap-password-save"
-                        onclick=${save} disabled=${busy || password.length < 8}>
-                        ${busy ? 'Saving...' : 'Save'}
-                    </button>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-// Curated regulatory-country list for the AP-radio dropdown. Empty
-// value = auto-detect from the kernel regdomain. Kept short and common
-// rather than the full ISO 3166 set; any saved code not in the list is
-// appended so it never silently disappears.
-const AP_COUNTRIES = [
-    ['DE', 'Germany'], ['AT', 'Austria'], ['CH', 'Switzerland'],
-    ['FR', 'France'], ['IT', 'Italy'], ['ES', 'Spain'], ['PT', 'Portugal'],
-    ['NL', 'Netherlands'], ['BE', 'Belgium'], ['LU', 'Luxembourg'],
-    ['GB', 'United Kingdom'], ['IE', 'Ireland'], ['DK', 'Denmark'],
-    ['SE', 'Sweden'], ['NO', 'Norway'], ['FI', 'Finland'], ['PL', 'Poland'],
-    ['CZ', 'Czechia'], ['SK', 'Slovakia'], ['HU', 'Hungary'],
-    ['US', 'United States'], ['CA', 'Canada'], ['AU', 'Australia'],
-    ['NZ', 'New Zealand'], ['JP', 'Japan'],
-];
-
-function APRadioModal({ wifi, showToast, onClose, onSaved }) {
-    const [band, setBand] = useState(wifi.ap_band === '5' ? '5' : '2.4');
-    const [country, setCountry] = useState(wifi.ap_country || '');
-    const [busy, setBusy] = useState(false);
-    const supports5 = !!wifi.band_5ghz_supported;
-
-    // Surface a saved code that isn't in the curated list.
-    const extras = (country && !AP_COUNTRIES.some(([c]) => c === country))
-        ? [[country, country]] : [];
-
-    const save = async () => {
-        setBusy(true);
-        const res = await api('/wifi/ap-radio', {
-            method: 'POST', body: JSON.stringify({ band, country }),
-        });
-        setBusy(false);
-        if (res.error) {
-            showToast('Save failed: ' + res.error);
-            return;
-        }
-        showToast(res.switched ? 'Applying radio change — the AP restarts briefly...' : 'AP radio saved');
-        onSaved();
-    };
-
-    // Band option rendered as a compact selectable row (NOT inside a
-    // .form-group — that stretches the radio input to full width).
-    const BandRow = ({ value, title, desc, disabled }) => html`
-        <label style="display:flex;align-items:flex-start;gap:10px;padding:10px;margin-bottom:6px;
-                      border:1px solid ${band === value ? 'var(--accent)' : 'var(--surface-2)'};
-                      border-radius:6px;cursor:${disabled ? 'not-allowed' : 'pointer'};
-                      opacity:${disabled ? 0.5 : 1};background:var(--bg)">
-            <input type="radio" name="ap-band"
-                style="width:16px;height:16px;min-height:0;flex:none;margin-top:2px;accent-color:var(--accent)"
-                checked=${band === value} disabled=${busy || disabled}
-                onChange=${() => setBand(value)} />
-            <span style="flex:1;min-width:0">
-                <div style="font-size:13px;font-weight:600">${title}</div>
-                <div style="font-size:11px;color:var(--text-dim);line-height:1.4">${desc}</div>
-            </span>
-        </label>`;
-
-    return html`
-        <div onclick=${onClose} style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px">
-            <div onclick=${e => e.stopPropagation()} style="background:var(--surface);border-radius:8px;padding:20px;max-width:420px;width:100%;max-height:90vh;overflow-y:auto">
-                <h3 style="margin-top:0">AP radio</h3>
-                <div style="margin-bottom:14px">
-                    <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">Band</div>
-                    <${BandRow} value="2.4" title="2.4 GHz"
-                        desc="Works on every Pi. Longest range. Shares the band with Bluetooth." />
-                    <div data-testid="ap-band-5">
-                        <${BandRow} value="5"
-                            title=${supports5 ? '5 GHz' : '5 GHz — not supported on this Pi'}
-                            desc="Frees the 2.4 GHz band for Bluetooth — best when BLE-MIDI is flaky. Shorter range; needs a 5 GHz-capable phone."
-                            disabled=${!supports5} />
                     </div>
-                </div>
-                <div class="form-group">
-                    <label>Country (regulatory)</label>
-                    <select data-testid="ap-country-select" disabled=${busy}
-                        value=${country} onChange=${e => setCountry(e.target.value)}>
-                        <option value="">Auto-detect (${wifi.resolved_country || 'DE'})</option>
-                        ${[...AP_COUNTRIES, ...extras].map(([code, name]) => html`
-                            <option value=${code}>${name} (${code})</option>`)}
-                    </select>
-                    <p style="font-size:11px;color:var(--text-dim);margin-top:4px">
-                        Required for 5 GHz and must match where the Pi is used.
-                    </p>
-                </div>
-                <p style="font-size:11px;color:var(--warn);margin-bottom:12px">
-                    Saving restarts the access point — phones on the AP drop for a few seconds and reconnect. If 5 GHz fails to come up, the Pi falls back to 2.4 GHz automatically.
-                </p>
-                <div style="display:flex;justify-content:flex-end;gap:8px">
-                    <button class="btn btn-secondary" onclick=${onClose} disabled=${busy}>Cancel</button>
-                    <button class="btn btn-primary" data-testid="ap-radio-save"
-                        onclick=${save} disabled=${busy}>
-                        ${busy ? 'Saving...' : 'Save'}
-                    </button>
-                </div>
+                    <button class="btn btn-secondary" style="font-size:12px"
+                        onclick=${() => save({ target: s.host + ':' + s.port })}>Send here</button>
+                </div>`)}
+            ${info.target ? html`
+                <button class="btn btn-secondary btn-block" style="margin-top:6px"
+                    onclick=${() => save({ target: '' })}>Use automatic target</button>` : null}
+            <div style="display:flex;gap:8px;margin-top:10px">
+                <input style="flex:1" placeholder="192.168.7.2:57110" value=${peer}
+                    onInput=${e => setPeer(e.target.value)} />
+                <button class="btn btn-secondary" disabled=${!peer.trim()}
+                    onclick=${() => {
+                        const peers = [...(info.manual_peers || []), peer.trim()];
+                        setPeer('');
+                        save({ manual_peers: peers });
+                    }}>Add peer</button>
             </div>
+            ${(info.manual_peers || []).length ? html`
+                <div style="font-size:12px;color:var(--text-dim);margin-top:8px">
+                    ${(info.manual_peers || []).map(peerHost => html`
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <span>${peerHost}</span>
+                            <button class="btn btn-secondary" style="font-size:11px"
+                                onclick=${() => save({
+                                    manual_peers: (info.manual_peers || []).filter(p => p !== peerHost),
+                                })}>Remove</button>
+                        </div>`)}
+                </div>` : null}
         </div>
     `;
 }
@@ -861,7 +486,7 @@ function UsbTetherCard() {
 //
 // Each sub-page is a self-contained component; the hub picks one based
 // on the URL section. The sub-pages reuse the existing card components
-// (WiFiCard, VersionsCard, etc.) — only the grouping into pages is new.
+// (OscCard, VersionsCard, etc.) — only the grouping into pages is new.
 
 // System Info sub-page — system stats, Reload, Reboot.
 function SettingsSysInfo({ showToast, isUpgrading }) {
@@ -885,8 +510,8 @@ function SettingsSysInfo({ showToast, isUpgrading }) {
 
     const factoryReset = async () => {
         if (!confirm('Factory reset: erase ALL routing, plugins, filters and '
-            + 'settings, then reboot.\n\nWiFi / access-point settings and your '
-            + 'saved backups are kept (restore one from Settings → Backup).\n\n'
+            + 'settings, then reboot.\n\nSaved backups are kept '
+            + '(restore one from Settings → Backup).\n\n'
             + 'Continue?')) return;
         if (!confirm('Really reset to factory defaults? This cannot be undone '
             + 'except by restoring a backup.')) return;
@@ -912,7 +537,7 @@ function SettingsSysInfo({ showToast, isUpgrading }) {
                         <div class="label">Process CPU</div>
                         <div class="value">${sys.cpu_percent}%</div>
                     </div>`}
-                    ${sys.cpu_cores && sys.cpu_cores.map(c => html`<div class="stat" title="Per-core system busy%. ${c.role === 'loop' ? 'Reserved for the MIDI loop — watch for saturation (causes loop lag).' : c.role === 'plugins' ? 'Reserved for the plugin engines — watch for saturation (causes note jitter).' : 'Housekeeping core (kernel, WiFi, mDNS, config-save).'} Updated every second.">
+                    ${sys.cpu_cores && sys.cpu_cores.map(c => html`<div class="stat" title="Per-core system busy%. ${c.role === 'loop' ? 'Reserved for the MIDI loop — watch for saturation (causes loop lag).' : c.role === 'plugins' ? 'Reserved for the plugin engines — watch for saturation (causes note jitter).' : 'Housekeeping core (kernel, Ethernet, mDNS, config-save).'} Updated every second.">
                         <div class="label">CPU${c.core}${c.role !== 'system' ? ' · ' + c.role : ''}</div>
                         <div class="value" style=${c.pct >= 85 ? 'color:var(--danger,#e94560)' : ''}>${c.pct}%</div>
                     </div>`)}
@@ -969,7 +594,7 @@ function SettingsSysInfo({ showToast, isUpgrading }) {
             <button class="btn btn-danger btn-block" onclick=${factoryReset} disabled=${isUpgrading}>Factory Reset</button>
             <p style="font-size:11px;color:var(--text-dim);margin:8px 2px 0">
                 Factory Reset erases routing, plugins and settings and reboots.
-                WiFi/AP settings and your backups are kept.
+                Backups are kept.
             </p>
         </div>
     `;
@@ -980,7 +605,14 @@ function SettingsNetwork({ showToast }) {
     const reload = useCallback(() => { api('/network').then(setIfaces).catch(() => {}); }, []);
     useEffect(() => { reload(); }, [reload]);
     return html`
-        <${WiFiCard} showToast=${showToast} />
+        <div class="card">
+            <h3>Ethernet</h3>
+            <p style="font-size:12px;color:var(--text-dim);margin-top:0">
+                This hub uses Ethernet only. Wi-Fi is off. Open the UI at
+                <code>http://raspimidihub-&lt;id&gt;.local/</code> on the wired network.
+            </p>
+        </div>
+        <${OscCard} showToast=${showToast} />
         <${UsbTetherCard} />
         ${ifaces.filter(i => i.interface !== 'wlan0' && !/^(usb\d+|enx[0-9a-f]{12})$/.test(i.interface)).map(i => html`
             <${NetworkCard} iface=${i} showToast=${showToast} reload=${reload} />
@@ -1323,7 +955,7 @@ function SettingsSpectator() {
             ${others.length === 0
                 ? html`<p style="color:var(--text-dim);font-size:13px">
                     No other devices connected. Open the app on a
-                    phone or tablet over WiFi or USB and it will
+                    phone or tablet on the same Ethernet network and it will
                     appear here.</p>`
                 : html`<ul class="spectator-clients">
                     ${others.map(c => {
@@ -1563,7 +1195,7 @@ function SettingsNetworkMidi({ showToast }) {
 
 const SECTIONS = [
     { key: 'sys-info',    title: 'Sys Info',                hint: 'Hostname, Filesystem, CPU, RAM, latency, Reload, Reboot' },
-    { key: 'network',     title: 'Network',                 hint: 'WiFi mode, AP password, USB tether, Ethernet' },
+    { key: 'network',     title: 'Network',                 hint: 'Ethernet, OSC, SuperCollider, USB tether' },
     { key: 'midi',        title: 'MIDI',                    hint: 'Default routing for new devices' },
     { key: 'display',     title: 'Display',                 hint: 'MIDI activity bar, sounds, scroll-assist, density' },
     { key: 'update',      title: 'Update',                  hint: 'Check GitHub, manage stored versions' },

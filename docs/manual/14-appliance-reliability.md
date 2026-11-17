@@ -92,9 +92,9 @@ essentially impossible.
 
 The routing service is a systemd unit: it starts after networking
 and ALSA, routes MIDI within roughly 30 seconds of power-on,
-restarts on crash (`Restart=always`), and brings up the AP via
-hostapd / dnsmasq. It comes up in the last saved state with no
-login or web access.
+restarts on crash (`Restart=always`), and blocks the Wi-Fi radio.
+It comes up in the last saved state with no login required. The
+UI is on Ethernet.
 
 ## LED Status
 
@@ -111,11 +111,11 @@ default (power present).
 
 ## Failure-Mode Catalogue
 
-### WiFi client lost mid-update
+### Update with no internet
 
-The 180-second watchdog (chapter 13.8) restarts the routing
-service, bringing the AP back; the deb cache (latest 3) survives,
-so the retry can install offline.
+The check stops and says so. Plug in Ethernet (or a USB-tethered
+phone) and try again. The deb cache (latest 3) survives, so an
+install of something already downloaded needs no network.
 
 ### Plugin crash
 
@@ -130,11 +130,12 @@ topology and the routing re-applied silently. On unplug, the
 row/column goes offline in the matrix; saved connections stay
 visible and dimmed.
 
-### AP wedged
+### UI unreachable
 
-If the AP is unreachable but the routing service is healthy (rare,
-usually hostapd hanging), `sudo reset-wifi` from a console forces
-AP mode with default credentials (chapter 13, *Console Recovery*).
+The hub has no access point. Use Ethernet and
+`http://raspimidihub-<id>.local/`. `sudo reset-wifi` from a console
+blocks the Wi-Fi radio and removes saved Wi-Fi profiles if an older
+image left one connected (chapter 13, *Console Recovery*).
 
 ### Config file corrupt
 

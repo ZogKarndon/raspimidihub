@@ -246,7 +246,7 @@ in renderparam (single source) so the renderers stay thin.
 Current Settings page becomes a sub-router. New components:
 
 - `settings_sys_info.js` — version, Reload, Reboot, system info
-- `settings_network.js` — Wi-Fi mode, captive portal
+- `settings_network.js` — Ethernet, OSC, USB tether
 - `settings_midi.js` — routing default, activity bar setting
 - `settings_display.js` — current Display section
 - `settings_update.js` — update check + install

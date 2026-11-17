@@ -78,6 +78,8 @@ SSE_EVENTS = {
     "plugin-display": "Per-instance display update; filtered by instance_id.",
     "plugin-param": "Per-instance parameter change; filtered by instance_id.",
     "network-midi-changed": "RTP-MIDI export / mirror / peer state changed.",
+    "osc-changed": "OSC / SuperCollider discovery changed (a server "
+                   "appeared or went quiet, or the send target moved).",
     "panic": "All-notes-off / panic was triggered.",
     "spectator-state": "Spectator service state broadcast.",
     "spectator-watch-start": "Targeted: a spectator started watching this "

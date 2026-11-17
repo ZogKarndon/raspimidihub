@@ -1,72 +1,94 @@
 # Connectivity and Software Updates
 
-How the hub reaches the network and gets new software. The choice
-of cable or radio determines whether the AP drops during an
-install.
-
-## Connectivity Modes
-
-Three WiFi modes are selectable in **Settings → WiFi → WiFi mode**.
-
-### AP only (default)
-
-The Pi broadcasts the `RaspiMIDIHub-XXXX` SSID and never joins
-another network -- no internet on the Pi, the right default for
-stage / studio use. The AP runs on 2.4 GHz by default; a dual-band
-Pi can move it to 5 GHz (**Settings → Network → AP radio**,
-chapter 12), freeing the band the onboard Bluetooth shares --
-worth doing when BLE-MIDI is unreliable (chapter 10, *Limits*).
-Updates need another internet path (17.3, 17.4) or a temporary
-mode switch.
-
-### WiFi for updates
-
-The AP stays up at idle; an install flips `wlan0` to client mode,
-fetches the deb, and flips back, dropping the phone or laptop AP
-connection roughly 30 seconds each way (the Pi has one wireless
-radio). If anything hangs in client mode, the 180-second watchdog
-(13.8) brings the AP back.
-
-### WiFi always
-
-The AP is off; the Pi is a normal WiFi client on the configured
-home network -- for fixed installations. No captive portal: reach
-the UI via `http://raspimidihub-<id>.local/` or the static / DHCP
-IP shown on the home router.
-
-## The Captive Portal
-
-The Pi answers the captive-portal probes of Android, iOS, macOS,
-and Windows, popping the UI in a sandboxed browser. If the portal
-does not fire (probe answer cached as "no internet", or suppressed
-by MDM / carrier WiFi policy), enter manually:
-
-- `http://raspimidihub-<id>.local/` -- the mDNS hostname.
-- The AP gateway IP (in the phone's WiFi-info screen).
+How the hub reaches the network and gets new software. Networking
+is **Ethernet only**. The Wi-Fi radio is turned off at startup;
+there is no access point, no client mode, and no captive portal.
 
 ## Ethernet
 
-The simplest update path. Plug a cable into the RJ45 port; the Pi
-acquires DHCP (or the static config from **Settings → Ethernet**)
-and Settings shows the resulting URL. The AP stays up -- AP and
-wired interface are independent. **Recommended for headless
-setups.**
+Plug a cable into the RJ45 port. The Pi takes DHCP, or the static
+address from **Settings → Network**. Open the UI at
+`http://raspimidihub-<id>.local/` from any machine on that network.
+`<id>` is the four-character code in the title bar.
+
+A direct cable between two hubs needs no router: each hub keeps an
+IPv4 link-local address (`169.254.x.y`) on `eth0` alongside any
+DHCP lease, so the two always share a subnet.
+
+USB Ethernet counts too. A second Raspberry Pi attached with a USB
+gadget link (`usb0`, or an `enx…` interface) is on the wired
+network for OSC and for SuperCollider discovery below. It is not
+Wi-Fi.
+
+## OSC
+
+**Settings → Network → OSC** is how the hub speaks Open Sound
+Control on that wire. The socket listens on UDP port 9000 (change
+it on the same card).
+
+An **OSC** device appears in the routing matrix:
+
+- MIDI you route *into* its **IN** port is sent to the current
+  target as OSC messages (`/midi/note_on`, `/midi/note_off`,
+  `/midi/cc`, `/midi/program`, `/midi/pitchbend`, `/midi/clock`,
+  `/midi/start`, `/midi/stop`, `/midi/continue`, `/midi/sysex`).
+  Channel numbers are 0–15. Pitch bend is the unsigned 14-bit
+  value (center 8192).
+- OSC messages of the same shape that arrive on port 9000 come
+  *out* of the device's **OUT** port as MIDI, and you route them
+  like any other source. A `/midi` message with the OSC MIDI
+  typetag is accepted too.
+
+With no target chosen, a single discovered server is used. Several
+servers and no choice means outbound MIDI is not sent until you
+tap **Send here** or add a manual peer (`host` or `host:port`).
+
+### SuperCollider servers
+
+Discovery is real, and it is narrow. Stock `scsynth` does not
+register with mDNS. It does answer `/status` with `/status.reply`
+when the packet can reach it. Every few seconds the hub sends
+`/status` to:
+
+- the broadcast address of each Ethernet and USB-Ethernet subnet;
+- the other of `.1` and `.2` when this Pi holds one of those
+  (the usual USB-gadget pair, `192.168.7.1` and `192.168.7.2`);
+- completed ARP neighbours on those interfaces;
+- any manual peer.
+
+A reply is listed on the Network page with synth and ugen counts.
+That is the supported discovery.
+
+What is **not** supported:
+
+- a server left on the default bind address `127.0.0.1` (start it
+  with `scsynth -u 57110 -B 0.0.0.0`, or in sclang
+  `s.options.bindAddress = "0.0.0.0"` before `s.boot`);
+- a server on another subnet, or only reachable over Wi-Fi;
+- Bonjour / mDNS advertisements (scsynth does not send them);
+- loading synthdefs, walking the node tree, or sending `/s_new`.
+  The hub delivers MIDI-shaped OSC. The synth that listens is
+  yours. A minimal receiver:
+
+```
+OSCFunc({ |msg|
+    // msg[1] channel, msg[2] note, msg[3] velocity
+}, '/midi/note_on');
+```
 
 ## USB Tethering
 
 A phone on a USB-A port with Personal Hotspot (iOS) or USB
-Tethering (Android) enabled provides internet without touching
-`wlan0`. Settings shows the tethered URL as a clickable link; the
-AP stays up. Unplugging the phone returns the internet state to
-"none".
+Tethering (Android) enabled provides internet without an Ethernet
+gateway. Settings shows the tethered URL as a clickable link.
+Unplugging the phone returns the internet state to "none".
 
 ## mDNS
 
 Each hub advertises a unique mDNS name: `raspimidihub-<id>.local`,
 where `<id>` is the four-character hardware code shown in the
-title bar, WiFi name, and captive-portal page (e.g.
-`raspimidihub-735C.local`) -- two hubs on one network never
-collide. Resolution requirements:
+title bar (e.g. `raspimidihub-735C.local`) -- two hubs on one
+network never collide. Resolution requirements:
 
 - **macOS, iOS** -- native, no setup.
 - **Linux** -- avahi-daemon must run (default on most
@@ -76,8 +98,8 @@ collide. Resolution requirements:
 - **Windows** -- needs Apple Bonjour (free from Apple's site, or
   bundled with iTunes).
 
-Without mDNS, use the gateway IP (AP mode) or the static / DHCP IP
-from the router's DHCP table (WiFi-always mode).
+Without mDNS, use the address DHCP gave `eth0` (or the static
+address from Settings → Network).
 
 ## Network MIDI -- Sharing Devices over the Network
 
@@ -118,7 +140,7 @@ offline peer's devices show as offline rows and recover by
 themselves.
 
 Sessions from Macs, iPads or DAWs are **not** mirrored
-automatically (a studio WLAN full of them would flood the matrix);
+automatically (a studio full of them would flood the matrix);
 they are listed under Settings → Network MIDI and in the Add menu,
 one tap to mirror.
 
@@ -152,10 +174,11 @@ pair per exported device); discovery is the same mDNS as
 dependency of the deb); when missing, the Settings page says so
 instead of offering the toggle.
 
-## Software Updates: The Three Paths
+## Software Updates
 
-**Check GitHub for newer versions** in **Settings → Software
-Versions** runs the same pipeline regardless of internet path:
+**Check GitHub for newer versions** in **Settings → Update** needs
+the wired network to already reach the internet. There is no
+Wi-Fi detour.
 
 1. Resolve GitHub.
 2. List the latest releases.
@@ -163,29 +186,13 @@ Versions** runs the same pipeline regardless of internet path:
 4. Keep the newest three `.deb` files on disk; delete older ones.
 5. Install on demand from the local cache.
 
-| Path | AP impact | Recommended for |
-|------|-----------|-----------------|
-| **Ethernet** (13.3) | AP stays up | Headless / fixed installations |
-| **USB tethering** (13.4) | AP stays up | Field updates when no ethernet |
-| **WiFi for updates** (13.1) | AP drops ~30 s twice | When neither cable is available |
+| Path | When |
+|------|------|
+| **Ethernet** | The cable's network can reach GitHub. The usual path. |
+| **USB tethering** | A phone on a USB-A port is sharing its connection, and there is no Ethernet route. |
 
+If neither path has internet, the check stops with that message.
 Once a deb is on disk, **Install** needs no internet at all.
-
-## The 180-Second Watchdog
-
-When `wlan0` is in client mode (WiFi for updates mid-update, or
-WiFi always), a 180-second watchdog force-restarts the routing
-service if anything hangs -- association without a DHCP lease, a
-lease without DNS, an install stuck partway, or the update
-orchestrator wedged. After it fires the Pi reverts to AP mode;
-reconnect and retry, or check the logs.
-
-## The 90-Second AP Fallback
-
-In **WiFi always** mode, a lost client connection (router reboot,
-out of range, password changed elsewhere) makes the hub fall back
-to AP mode within roughly 90 seconds, with the configured AP
-credentials. No user action required.
 
 ## Console Recovery
 
@@ -195,8 +202,9 @@ The bootstrap image ships with **sshd enabled**, using the user
 and key/password from the Pi Imager wizard -- which also makes a
 failed first boot diagnosable (chapter 2). Commonly useful:
 
-- `sudo reset-wifi` -- forces AP mode with default credentials;
-  use when the WiFi state is wedged or access is locked out.
+- `sudo reset-wifi` -- blocks the Wi-Fi radio and drops saved
+  Wi-Fi profiles. The hub stays on Ethernet. Use it if an older
+  image left a client connection that is fighting the cable.
 - `journalctl -u raspimidihub -e` -- tails the routing service log
   (BLE issues, update failures, unexpected restarts).
 - `sudo mount -o remount,rw / && sudo dpkg --configure -a && sudo

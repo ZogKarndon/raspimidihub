@@ -24,7 +24,7 @@ components retain their own licences (Preact -- MIT; HTM -- Apache 2.0).
   `Cmd + R`.
 - Network URLs are written as `http://raspimidihub-<id>.local/`,
   where `<id>` is the four-character code shown in the hub's title
-  bar and WiFi name (e.g. `raspimidihub-735C.local`). Each hub's name
+  bar (e.g. `raspimidihub-735C.local`). Each hub's name
   is unique so several can share a network. Substitute the hub's IP
   if mDNS is unavailable on your network.
 
@@ -36,7 +36,7 @@ question.
 :::
 
 ::: warning
-Information that prevents data loss, a stuck WiFi state, or a
+Information that prevents data loss, a stuck network, or a
 bricked SD card.
 :::
 

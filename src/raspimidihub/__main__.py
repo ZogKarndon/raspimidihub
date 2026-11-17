@@ -23,11 +23,11 @@ from .runtime.loops import (
     rate_meter,
     sse_heartbeat,
     watchdog_ping,
-    wifi_watchdog,
 )
 from .runtime.stall_sensor import StallSensor
 from .web import WebServer
-from .wifi import WifiManager
+from .osc_transport import OscTransport
+from .wifi import WifiManager, disable_wifi_radio
 
 log = logging.getLogger("raspimidihub")
 
@@ -135,8 +135,13 @@ async def async_main() -> None:
     network_midi = NetworkMidiManager(engine, config, server)
     engine._network_midi = network_midi  # device scans see mirror clients
 
+    # OSC on Ethernet (and USB Ethernet). SuperCollider servers are
+    # found with a /status probe; see osc_transport.
+    osc = OscTransport(engine, config, server)
+    engine._osc = osc
+
     # Register API routes
-    register_api(server, engine, config, wifi, bt, network_midi)
+    register_api(server, engine, config, wifi, bt, network_midi, osc)
 
     # Spectator-mode mirroring service. Owns its own routes, per-conn
     # state map, and watcher tracking; plugs into the WebServer via
@@ -391,33 +396,15 @@ async def async_main() -> None:
         else:
             log.info("eth0 link-local NM setup skipped (not root / off-appliance)")
 
-        # Start WiFi in the saved mode. The persisted preference is
-        # `wifi_mode_pref` (ap_only / wifi_for_updates / wifi_always) —
-        # the same key the apply-mode endpoint, update_flow and the
-        # Settings UI use. Only `wifi_always` boots into client mode;
-        # `wifi_for_updates` and `ap_only` come up as the AP (the
-        # for-updates mode joins home WiFi only transiently, on demand).
-        # (Until 5.1.x this read a legacy `wifi["mode"]` key that the UI
-        # never wrote, so "WiFi always" silently reverted to AP on every
-        # reboot — issue #6.)
-        wifi_cfg = config.wifi
-        if wifi_cfg.get("wifi_mode_pref") == "wifi_always" \
-                and wifi_cfg.get("client_ssid"):
-            log.info("WiFi: starting client mode (wifi_mode_pref=wifi_always)")
-            await wifi.start_client_with_fallback(
-                wifi_cfg["client_ssid"], wifi_cfg.get("client_password", ""),
-                wifi_cfg.get("ap_ssid", ""), wifi_cfg.get("ap_password", "midihub1"),
-            )
-        else:
-            try:
-                wifi.start_ap(
-                    ssid=wifi_cfg.get("ap_ssid", ""),
-                    password=wifi_cfg.get("ap_password", "midihub1"),
-                    band=wifi_cfg.get("ap_band", "2.4"),
-                    country=wifi_cfg.get("ap_country", ""),
-                )
-            except Exception:
-                log.warning("WiFi AP setup failed (no wlan0?), continuing without AP")
+        # Ethernet only. Block the Wi-Fi radio when one is present so
+        # the appliance does not come up as an access point or a client.
+        # Failure (no radio, not root) is logged inside and ignored.
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, disable_wifi_radio)
+        except Exception:
+            log.warning("Wi-Fi radio disable skipped", exc_info=True)
+        log.info("Network: Ethernet only (Wi-Fi disabled)")
 
         # Re-attach BLE-MIDI bridges for devices BlueZ still has
         # connected from before this process restarted, AND initiate
@@ -432,6 +419,7 @@ async def async_main() -> None:
         # for online devices, discovery browser starts. After the
         # initial scan so exported devices resolve to ALSA clients.
         asyncio.ensure_future(network_midi.start())
+        asyncio.ensure_future(osc.start())
 
         notify_systemd("READY=1")
         log.info("Service ready (web on port %d)", port)
@@ -441,9 +429,6 @@ async def async_main() -> None:
         if watchdog_usec:
             interval = int(watchdog_usec) / 1_000_000 / 2
             asyncio.ensure_future(watchdog_ping(interval, notify_systemd))
-
-        # WiFi client mode watchdog — fall back to AP if connection lost
-        asyncio.ensure_future(wifi_watchdog(wifi, config, server))
 
         # MIDI rate meter — snapshot and broadcast every second
         asyncio.ensure_future(rate_meter(engine, server))
@@ -505,6 +490,10 @@ async def async_main() -> None:
             await asyncio.wait_for(network_midi.stop(), timeout=2.0)
         except (Exception, asyncio.CancelledError):
             log.warning("Network MIDI stop failed", exc_info=True)
+        try:
+            await asyncio.wait_for(osc.stop(), timeout=2.0)
+        except (Exception, asyncio.CancelledError):
+            log.warning("OSC stop failed", exc_info=True)
         # Flush a final autosave BEFORE tearing down plugins, so a clean
         # stop (deploy / reboot) resumes the exact in-memory state and the
         # snapshot still sees live plugin instances. Power cuts skip this

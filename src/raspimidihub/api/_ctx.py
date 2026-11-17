@@ -29,6 +29,7 @@ class ApiContext:
     wifi: WifiManager | None = None
     bluetooth: BluetoothMidi | None = None
     network_midi: object | None = None
+    osc: object | None = None
     # Filled in by register_api() during wiring.
     autosaver: _Autosaver | None = None
 

@@ -24,11 +24,9 @@ export const noteName = (n) => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 2);
 export const UPDATE_LABELS = {
     'idle': '',
     'probing': 'Checking internet...',
-    'switching-to-client': 'Joining WiFi...',
     'verifying-internet': 'Verifying internet...',
     'fetching-release-list': 'Fetching release list...',
     'downloading': 'Downloading...',
-    'switching-to-ap': 'Returning to AP...',
     'installing': 'Installing...',
     'done': 'Done.',
 };

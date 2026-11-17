@@ -180,33 +180,20 @@ DEFAULT_CONFIG = {
         "ci_enabled": True,
         "ci_disabled": [],
     },
-    "wifi": {
-        "mode": "ap",
-        "ap_ssid": "",
-        "ap_password": "midihub1",
-        # AP radio band: "2.4" (default, every supported Pi) or "5"
-        # (Pi 3B+/4/5 only — auto-falls back to 2.4 on 2.4-only radios
-        # and if a 5 GHz bring-up fails, so it can never lock the AP
-        # out). 5 GHz keeps the AP off the 2.4 GHz band Bluetooth shares,
-        # which relieves BLE-MIDI coexistence on the combo-chip Pis.
-        "ap_band": "2.4",
-        # Regulatory country (ISO 3166 alpha-2, e.g. "DE"). Required for
-        # 5 GHz and makes the 2.4 GHz AP regulatory-correct too. Empty =
-        # auto-detect from the kernel regdomain (`iw reg get`), falling
-        # back to DE.
-        "ap_country": "",
-        "client_ssid": "",
-        "client_password": "",
-        # Phase 5.5: how aggressively the Pi should reach the internet
-        # for update fetches. ap_only = stay AP, fail with actionable
-        # error if no ethernet path. wifi_for_updates = transient switch
-        # to client just for the fetch, then back. wifi_always = stay
-        # in client mode (only useful when no AP clients are present).
-        "wifi_mode_pref": "ap_only",
+    # Ethernet OSC. Wi-Fi is not configured: the hub does not start an
+    # access point or join a wireless network. `target` is "host" or
+    # "host:port"; empty means "the only discovered SuperCollider
+    # server", or nowhere when several are visible.
+    "osc": {
+        "enabled": True,
+        "listen_port": 9000,
+        "sc_port": 57110,
+        "target": "",
+        "manual_peers": [],
     },
     "network_midi": {
         # Master switch: advertise exports + browse for peers only
-        # when on. Like the wifi block this is an appliance setting:
+        # when on. Like the osc block this is an appliance setting:
         # applied immediately, saved via asave(), no dirty/asterisk.
         "enabled": False,
         # stable_ids of local devices advertised as RTP-MIDI sessions.
@@ -279,8 +266,12 @@ class Config:
         return self._data.get("disconnected", [])
 
     @property
-    def wifi(self) -> dict:
-        return self._data.get("wifi", DEFAULT_CONFIG["wifi"])
+    def osc(self) -> dict:
+        block = self._data.get("osc")
+        if not isinstance(block, dict):
+            block = json.loads(json.dumps(DEFAULT_CONFIG["osc"]))
+            self._data["osc"] = block
+        return block
 
     @property
     def network_midi(self) -> dict:
@@ -295,6 +286,16 @@ class Config:
         # Drop the legacy "presets" key — feature was removed, but old
         # configs on disk still carry the dict.
         self._data.pop("presets", None)
+        # Wi-Fi setup was removed. Old configs may still carry a `wifi`
+        # block (AP password, home SSID); it is not applied.
+        self._data.pop("wifi", None)
+        # Own the osc block. _deep_merge shares DEFAULT_CONFIG's dict
+        # when the file has no osc key, and later edits must not leak
+        # into the process-wide default.
+        osc_block = self._data.get("osc")
+        if not isinstance(osc_block, dict):
+            osc_block = DEFAULT_CONFIG["osc"]
+        self._data["osc"] = json.loads(json.dumps(osc_block))
         self._fallback_active = False
         log.info("Loaded config from %s", source)
 
@@ -452,22 +453,19 @@ class Config:
         import asyncio
         return await asyncio.to_thread(self._fork_save_and_wait, make_backup)
 
-    def factory_reset(self, keep_wifi: bool = True) -> bool:
+    def factory_reset(self, keep_wifi: bool = False) -> bool:
         """Reset to factory defaults, reboot-clean. The rolling backups/
         are deliberately KEPT (a reset stays recoverable via Settings →
-        Backup); when `keep_wifi` the current wifi/AP block is preserved
-        so the hub stays reachable on the same network. config.json + its
-        .bak are rewritten to the reset state and the resume snapshot
-        (autosave slots) is cleared, so a reboot comes up factory-fresh
-        instead of resuming the pre-reset live state. Returns True on
-        success. Caller must silence the autosaver first (see
-        _Autosaver.disable) or the shutdown flush will recreate a slot
-        from the still-live old engine state."""
+        Backup). `keep_wifi` is accepted and ignored: the hub is
+        Ethernet-only and a reset never restores an access point.
+        config.json + its .bak are rewritten to the reset state and the
+        resume snapshot (autosave slots) is cleared, so a reboot comes
+        up factory-fresh instead of resuming the pre-reset live state.
+        Returns True on success. Caller must silence the autosaver first
+        (see _Autosaver.disable) or the shutdown flush will recreate a
+        slot from the still-live old engine state."""
         try:
             reset = json.loads(json.dumps(DEFAULT_CONFIG))
-            if keep_wifi:
-                reset["wifi"] = json.loads(json.dumps(
-                    self._data.get("wifi", DEFAULT_CONFIG["wifi"])))
             self._data = reset
             config_json = json.dumps(self._data, indent=2, ensure_ascii=False)
             json.loads(config_json)  # validate
@@ -491,14 +489,13 @@ class Config:
                     slot.unlink(missing_ok=True)
 
             self._fallback_active = False
-            log.info("Factory reset complete (wifi %s, backups kept)",
-                     "kept" if keep_wifi else "reset")
+            log.info("Factory reset complete (ethernet-only, backups kept)")
             return True
         except Exception:
             log.exception("Factory reset failed")
             return False
 
-    async def afactory_reset(self, keep_wifi: bool = True) -> bool:
+    async def afactory_reset(self, keep_wifi: bool = False) -> bool:
         import asyncio
         return await asyncio.to_thread(self.factory_reset, keep_wifi)
 

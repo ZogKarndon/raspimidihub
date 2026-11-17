@@ -238,12 +238,10 @@ function App({ onSpectatorWatched, onRouteChange }) {
         connectionsRef.current = c;
     }, []);
 
-    // Hub identity for the header badge (version · WiFi name). Re-run on
-    // every SSE (re)connect, not just at mount: a phone that roams from
-    // one hub's AP to another's keeps the tab open, so the stream
-    // reconnects to the *new* hub — without this the badge would keep
-    // showing the previous hub's name. /system is served by whichever
-    // hub answers, so this always reflects the hub we're actually on.
+    // Hub identity for the header badge (version · hardware id). Re-run
+    // on every SSE (re)connect, not just at mount, so a browser that
+    // moves from one hub to another on the wired network picks up the
+    // new name. /system is served by whichever hub answers.
     const loadSystemInfo = useCallback(() => {
         api('/system').then(s => {
             setConfigFallback(s.config_fallback);

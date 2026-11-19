@@ -147,8 +147,7 @@ Everything that affects how the unit *runs*:
   per-slot trigger notes
 - Every device rename and port rename
 - The default routing for new devices (Connect all / None)
-- The WiFi configuration: AP SSID and password, home WiFi
-  credentials, WiFi mode preference
+- OSC settings: listen port, SuperCollider port, send target, manual peers
 
 ## What the State Does Not Contain
 
@@ -161,14 +160,9 @@ Everything that affects how the unit *runs*:
   controller instance each tab left open) — also browser-local.
 
 Importing on another unit moves routing and plugin state across;
-the second unit keeps its own WiFi credentials, Bluetooth bonds,
-and browser-side preferences.
-
-::: warning
-WiFi credentials *are* part of the exported state. Before sharing a
-config, edit the WiFi section out of the JSON, or change the AP
-password on the receiving unit after import.
-:::
+the second unit keeps its own Bluetooth bonds and browser-side
+preferences. An old file's `wifi` block is ignored on load. OSC
+settings in the file (target, peers) do apply.
 
 ## The Save / Load / Export / Import Map
 

@@ -30,12 +30,9 @@ if ! curl -sSf --max-time 10 -o /dev/null https://github.com 2>/dev/null; then
     echo "dependencies from GitHub, so this Pi needs internet during install." >&2
     echo "" >&2
     echo "Common causes:" >&2
-    echo "  - Ethernet on an isolated LAN with no gateway to the internet." >&2
-    echo "  - WiFi radio blocked because no WiFi country was set when" >&2
-    echo "    flashing (a fresh image keeps WiFi rfkill-blocked until then):" >&2
-    echo "        sudo raspi-config nonint do_wifi_country DE   # your ISO code" >&2
-    echo "        # or: sudo iw reg set DE && sudo nmcli radio wifi on" >&2
-    echo "    then connect to your network." >&2
+    echo "  - No Ethernet cable, or the LAN has no gateway to the internet." >&2
+    echo "  - This installer does not use Wi-Fi. Plug in Ethernet" >&2
+    echo "    (or USB-tether a phone) and re-run." >&2
     echo "" >&2
     echo "Re-run this installer once the Pi can reach the internet." >&2
     exit 1

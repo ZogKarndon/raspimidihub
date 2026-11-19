@@ -4,29 +4,25 @@ Common failure modes seen in the wild, and how to fix them.
 
 ## Cannot Reach the UI
 
-### The AP is not visible
+The hub does not broadcast Wi-Fi. Plug in Ethernet.
 
-No `RaspiMIDIHub-XXXX` SSID on the phone. Check the green ACT LED:
-off = the service did not start; fast blink with the red PWR LED
-on = the config failed to load. Power-cycle the Pi and wait the
-full 30 seconds for boot. Last resort, over Ethernet or SSH:
-`sudo reset-wifi` forces AP mode with default credentials.
+### The page does not load
 
-### The AP is visible but the captive portal does not open
-
-Navigate manually to `http://raspimidihub-<id>.local/` (needs
-mDNS; chapter 13.5) or the AP gateway IP from the phone's
-WiFi-info screen. Some phones cache "this network has no internet"
-and suppress the portal probe; toggle the phone's WiFi off and on.
+Check the green ACT LED: off = the service did not start; fast
+blink with the red PWR LED on = the config failed to load.
+Power-cycle the Pi and wait the full 30 seconds for boot. Then
+open `http://raspimidihub-<id>.local/` from a machine on that
+network. Over SSH, `sudo reset-wifi` blocks the Wi-Fi radio if an
+older image left it associated.
 
 ### `raspimidihub-<id>.local` doesn't resolve
 
-Use the hub's unique name -- `<id>` is the four-character code on
-its captive-portal page, title bar, and WiFi name (e.g.
+Use the hub's unique name -- `<id>` is the four-character code in
+the title bar (e.g.
 `raspimidihub-735C.local`). Usual cause: no mDNS on the client
 (Windows needs Apple Bonjour; some Linux systems lack
-avahi-daemon). Fall back to the AP gateway IP, or the router's
-DHCP table (WiFi-always mode).
+avahi-daemon). Fall back to the address on `eth0` (the router's
+DHCP table, or **Settings → Network**).
 
 ## MIDI Not Flowing
 
@@ -134,17 +130,16 @@ restart the service or reboot.
 
 ### Stuck on download
 
-AP-only mode has no internet: set **Settings → WiFi → WiFi mode**
-to **WiFi for updates** or **WiFi always**, or plug in Ethernet or
-a USB-tethered phone. If the Stats card shows a healthy loop, the
-install is proceeding -- slow downloads happen.
+The wired network cannot reach GitHub. Plug in Ethernet, or a
+USB-tethered phone, and try again. If the Stats card shows a
+healthy loop, the install is proceeding -- slow downloads happen.
 
 ### "Check GitHub for newer versions" finds nothing
 
-Test internet on the phone *while connected to the AP* -- if the
-phone has none through the AP, neither does the Pi. Or the running
-version is simply the latest; compare **Settings → Software
-Versions** with the GitHub releases page.
+Confirm the Pi itself can reach the internet (the cable's router,
+not the computer you are browsing from). Or the running version is
+simply the latest; compare **Settings → Update** with the GitHub
+releases page.
 
 ### Install failed
 
@@ -239,7 +234,7 @@ re-check.
 
 - `sudo systemctl restart raspimidihub` -- restart the routing
   service.
-- `sudo reset-wifi` -- force AP mode with default credentials.
+- `sudo reset-wifi` -- block the Wi-Fi radio and drop saved Wi-Fi profiles.
 - `journalctl -u raspimidihub -e` -- read the service logs.
 - `sudo reboot` -- restart the Pi.
 

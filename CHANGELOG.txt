@@ -4,6 +4,12 @@ User-visible changes. Short tagged one-liners, no code or commit
 hashes. Tags: Added, Improved, Fix, Changed, Removed.
 
 
+2026-11-17 — Unreleased
+
+- Removed: Wi-Fi access point, Wi-Fi client mode, captive portal, and the `wifi` config block. The hub is Ethernet-only; the radio is blocked at startup. `sudo reset-wifi` now blocks Wi-Fi instead of starting an AP. Old config files drop their `wifi` object on load
+- Added: OSC on the wired network (UDP 9000). MIDI routed into the OSC device is sent as `/midi/note_on` and the other `/midi/…` messages; the same messages arriving on the socket come out as MIDI
+- Added: SuperCollider server discovery by OSC `/status` on Ethernet and USB Ethernet (broadcast, the `.1`/`.2` gadget pair, ARP neighbours, manual peers). Not discovered: servers bound to 127.0.0.1, other subnets, or mDNS. The hub does not upload synthdefs or drive the node tree
+
 2026-09-20 — Version 6.0.0
 
 The first stable release since 5.2.0, collecting the whole alpha

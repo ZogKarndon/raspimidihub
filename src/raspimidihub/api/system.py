@@ -49,10 +49,10 @@ def register_system(ctx: ApiContext) -> None:
         from ..wifi import default_ap_ssid
         _ump = probe_ump_support()
         hostname = socket.gethostname()
-        # The AP SSID is what the user sees in the WiFi list and the
-        # header badge mirrors it. Configured name wins; else the
-        # RaspiMIDIHub-<MAC suffix> default.
-        ap_ssid = config.wifi.get("ap_ssid") or default_ap_ssid()
+        # Header badge. The name is the hardware id (RaspiMIDIHub-XXXX);
+        # there is no Wi-Fi SSID to mirror anymore. The JSON key stays
+        # `ap_ssid` so existing clients keep reading the badge.
+        ap_ssid = default_ap_ssid()
 
         # IP addresses — the `ip` subprocesses run on a worker thread:
         # fork/exec/waitpid on the loop blocked the MIDI loop 10-150 ms
@@ -330,17 +330,17 @@ def register_system(ctx: ApiContext) -> None:
         return Response.json({"status": "rebooting"})
 
     # ================================================================
-    # POST /api/system/factory-reset — wipe to defaults, keep backups +
-    # WiFi, then reboot clean. Recoverable via Settings → Backup.
+    # POST /api/system/factory-reset — wipe to defaults, keep backups,
+    # then reboot clean. Recoverable via Settings → Backup.
     # ================================================================
 
-    @server.route("POST", "/api/system/factory-reset", summary="Wipe config to defaults (keeps backups and WiFi), then reboot clean.")
+    @server.route("POST", "/api/system/factory-reset", summary="Wipe config to defaults (keeps backups), then reboot clean.")
     async def api_factory_reset(req: Request) -> Response:
         # Silence autosave first: the shutdown flush would otherwise
         # recreate the resume snapshot from the still-live old engine
         # state and undo the reset on the next boot.
         autosaver.disable()
-        ok = await config.afactory_reset(keep_wifi=True)
+        ok = await config.afactory_reset()
         if not ok:
             return Response.error("Factory reset failed — see the hub log.")
         # Reboot so the appliance comes up clean from the reset config.

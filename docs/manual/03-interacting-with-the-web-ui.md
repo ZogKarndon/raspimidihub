@@ -7,19 +7,16 @@ every panel is built from; later chapters assume this vocabulary.
 
 ## First Connection
 
-By default the Pi is in **AP-only** mode, broadcasting an SSID of the
-form `RaspiMIDIHub-XXXX` with password `midihub1`. Joining it
-triggers the captive portal on most operating systems and the UI
-opens automatically. Manual entry points if it does not:
+Plug the Pi into Ethernet and open a browser on that network:
 
 - `http://raspimidihub-<id>.local/` -- mDNS. Works out of the box on
   macOS, iOS, modern Android, and Linux with avahi-daemon; Windows
-  needs Bonjour installed.
-- The AP gateway IP from the phone's WiFi-info screen (for example
-  `http://172.24.1.1/`).
+  needs Bonjour installed. `<id>` is the four-character code in the
+  title bar.
+- The Pi's DHCP or static address, if mDNS is not available.
 
-Chapter 13 covers the alternative connectivity modes (USB tethering,
-ethernet, WiFi-always client mode).
+There is no Wi-Fi access point. Chapter 13 covers Ethernet, OSC,
+and USB tethering.
 
 ## The Four Tabs
 
@@ -57,13 +54,12 @@ important indicator in the UI.
 
 ## The Header Badge
 
-The header reads `RaspiMIDIHub v<version> · <name>`: the AP SSID with
-the `RaspiMIDIHub-` prefix stripped, so the factory default shows the
-MAC suffix (e.g. `735C`) and a custom SSID shows verbatim -- the same
-identifier you pick the hub by in the WiFi list. Change it via
-**AP SSID** under **Settings → WiFi**; the MAC suffix itself is not
-editable. The name is re-read on every reconnection, so the header
-always shows the hub you are actually talking to.
+The header reads `RaspiMIDIHub v<version> · <name>`: the hardware id
+with the `RaspiMIDIHub-` prefix stripped, so it shows the MAC suffix
+(e.g. `735C`). That suffix is also the `<id>` in
+`raspimidihub-<id>.local`. It is not editable. The name is re-read
+on every reconnection, so the header always shows the hub you are
+actually talking to.
 
 A small red dot next to the title means the SPA in the browser is
 older than the backend; tap it to reload. The same reload sits under
@@ -84,14 +80,6 @@ Five touch gestures recur everywhere:
 The Tracker has its own keyboard scheme on the **Play** tab (chapter
 9, appendix D); `ESC` closes the topmost overlay everywhere.
 
-## The Captive Portal
-
-The hub answers the captive-portal probes of Android, iOS, macOS, and
-Windows with a redirect to its root, cueing the OS to open the UI in
-a sandboxed browser. If the portal does not fire (some phones cache
-"no internet" too aggressively; some carrier WiFi policies suppress
-the probe), use the URLs from section 3.1.
-
 ## PWA Install
 
 The web UI is a Progressive Web App. **Settings → PWA Install** shows
@@ -109,9 +97,9 @@ Display**.
 
 ## Reconnect After Network Disruption
 
-If the hub flips WiFi modes (chapter 13), reboots, or the browser
-drops the connection, the SPA shows a banner offering to reconnect;
-the reconnect itself is automatic.
+If the hub reboots or the browser drops the connection, the SPA
+shows a banner offering to reconnect; the reconnect itself is
+automatic.
 
 ## Themes
 

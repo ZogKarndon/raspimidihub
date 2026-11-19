@@ -8,7 +8,7 @@ last sub-page across tab switches.
 | Sub-page | What lives there |
 |---|---|
 | **Sys Info** | Live system stats (version, filesystem, CPU, RAM, latency, IPs), **Reload App**, **Reboot Pi**, **Factory Reset** |
-| **Network** | WiFi card with mode picker + home / AP credentials, USB-tether status, Ethernet config |
+| **Network** | Ethernet (DHCP or static), OSC and SuperCollider discovery, USB-tether status |
 | **MIDI** | Default routing for newly-plugged-in devices (all-to-all / disconnected — **disconnected by default**) |
 | **Display** | Per-device browser preferences — activity bar, knob/wheel tick sounds, scroll-assist FABs, layout density |
 | **Update** | Check GitHub, manage stored versions, install |
@@ -123,67 +123,23 @@ Restore or download one of the rolling save checkpoints written by
 every **Save Config**. Documented with the rest of the save/backup
 model in chapter 11 (*Backup Checkpoints*).
 
-## WiFi
+## Network
 
-A single card: WiFi status badge plus rows for credentials and mode.
+The hub is Ethernet-only. The Network page has no Wi-Fi mode, no
+access-point password, and no home-network credentials.
 
-### Status badge
+### Ethernet
 
-One line: AP mode SSID, client mode SSID + IP, or "Bringing up..."
-during a transition. Colour mirrors the state.
+Explained under **Ethernet (eth0)** below: DHCP or a static address.
 
-### Home WiFi
+### OSC
 
-**SSID** and **Password**; saving provisions the home network for
-the **WiFi for updates** and **WiFi always** modes. These
-credentials are part of the saved project state and appear in
-**Export Config** JSON — edit the WiFi section out before sharing
-an export (chapter 11.9).
-
-### AP Password
-
-Sets the access-point password; minimum 8 characters (WPA2). Saving
-restarts the AP briefly — the phone drops and reconnects with the
-new password.
-
-::: warning
-The default AP password is `midihub1` and is published. Change it
-the first time the unit is used outside a personal home.
-:::
-
-### AP radio
-
-- **Band** — **2.4 GHz** (default) works on every supported Pi with
-  the longest range. On a Pi 4 or 5, WiFi and Bluetooth use
-  separate radios and coexist cleanly; **5 GHz** is even tidier —
-  it leaves 2.4 GHz entirely to Bluetooth, so there is no
-  interference at all — but has shorter range and needs a
-  5 GHz-capable phone. On Pi 3-class boards (3B+, Zero 2 W)
-  Bluetooth and WiFi share one radio, so a 2.4 GHz AP can disrupt
-  BLE-MIDI (chapter 10, *Limits*); there, 5 GHz stops that
-  competition. Greyed out on radios that can't do it (Pi 3B,
-  Zero 2 W).
-- **Country** — the regulatory domain. **Auto-detect** uses the
-  Pi's kernel regdomain (fallback DE). Must match where the Pi is
-  used; **required for 5 GHz**.
-
-Saving restarts the AP (phones drop a few seconds). 5 GHz uses a
-non-DFS channel (36/40/44/48), so no radar-detection wait; if
-bring-up fails, the Pi falls back to 2.4 GHz automatically — the AP
-always comes back up.
-
-### WiFi mode
-
-- **AP only** — the default. AP broadcast, never a client, no
-  internet on the Pi.
-- **WiFi for updates** — AP stays up at idle; an update briefly
-  flips `wlan0` to client to fetch the deb, then back. The AP drops
-  for ~30 seconds.
-- **WiFi always** — AP off; the Pi is a normal WiFi client. For
-  units permanently on a home or venue network. If the configured
-  network goes away, the hub falls back to AP mode on its own;
-  fallback timing and console recovery (`sudo reset-wifi`) are in
-  chapter 13.
+The card turns the OSC socket on or off (UDP 9000 by default) and
+lists SuperCollider servers that answered `/status`. **Send here**
+picks the destination for MIDI routed into the OSC device. **Add
+peer** is the manual `host:port` when discovery cannot see the
+server (different subnet, or broadcast filtered). What discovery
+does and does not cover is chapter 13.
 
 ### USB-tethered phone link
 
@@ -310,13 +266,13 @@ Every locally-stored `.deb`, newest first, with changelog and an
 **Check GitHub for newer versions** auto-downloads anything newer
 than the running build and keeps the latest three on disk, so
 re-installs work fully offline. A progress bar plus a hopping
-"we're alive" dot shows install liveness; a 180-second watchdog
-forces the Pi back to AP mode if the install hangs.
+"we're alive" dot shows install liveness. The check needs Ethernet
+(or a USB tether) that can already reach GitHub.
 
 The installer also manages the `raspimidihub-rosetup` package
 alongside `raspimidihub`; both are kept and offered together. See
-chapter 13 for the three internet paths an install can use
-(ethernet, USB tethering, WiFi for updates).
+chapter 13 for the two internet paths an install can use
+(Ethernet, USB tethering).
 
 ## PWA Install
 
@@ -342,10 +298,11 @@ reconnects automatically.
 plugins, filters and settings, then reboots factory-fresh. Kept
 deliberately:
 
-- **WiFi / AP settings** (AP password, home-WiFi credentials) — the
-  hub stays reachable after the reboot.
 - **Rolling backups** — a mistaken reset is recoverable from
   **Settings → Backup**.
+
+Wi-Fi settings are not part of the config, so there is nothing to
+keep. Reach the hub on Ethernet after it reboots.
 
 The reset clears the resume snapshot, so the unit does not resume
 the pre-reset state. Newly-plugged devices then arrive disconnected

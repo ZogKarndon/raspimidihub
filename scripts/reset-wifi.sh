@@ -1,10 +1,11 @@
 #!/bin/bash
-# Reset RaspiMIDIHub to WiFi Access Point mode
-# Run this if you can't reach the Pi after it joined a WiFi network.
+# Block Wi-Fi on an Ethernet-only RaspiMIDIHub.
+# Older images may still have a client profile. This drops those
+# profiles and rfkills the radio. It does not start an access point.
 # Usage: sudo reset-wifi
 set -e
 
-echo "Resetting RaspiMIDIHub to Access Point mode..."
+echo "Blocking Wi-Fi. The hub stays on Ethernet."
 
 mount -o remount,rw /
 
@@ -17,29 +18,28 @@ for f in /etc/NetworkManager/system-connections/*.nmconnection; do
     fi
 done
 
-# Reset config to AP mode. wifi_mode_pref is the key the service actually
-# boots from (ap_only / wifi_for_updates / wifi_always); the legacy `mode`
-# key is set too for older builds.
+# Drop a legacy wifi block from the config if one is still on disk.
 CONFIG="/boot/firmware/raspimidihub/config.json"
 if [ -f "$CONFIG" ]; then
     python3 -c "
 import json
 with open('$CONFIG') as f:
     cfg = json.load(f)
-w = cfg.setdefault('wifi', {})
-w['wifi_mode_pref'] = 'ap_only'
-w['mode'] = 'ap'
-with open('$CONFIG', 'w') as f:
-    json.dump(cfg, f, indent=2)
-print('  Config set to AP mode (wifi_mode_pref=ap_only)')
+if 'wifi' in cfg:
+    cfg.pop('wifi', None)
+    with open('$CONFIG', 'w') as f:
+        json.dump(cfg, f, indent=2)
+    print('  Removed legacy wifi config')
+else:
+    print('  No wifi config to remove')
 "
 fi
+
+rfkill block wifi 2>/dev/null || true
+nmcli radio wifi off 2>/dev/null || true
 
 mount -o remount,ro /
 
 echo "Restarting service..."
 systemctl restart raspimidihub
-
-echo ""
-echo "Done! Connect to WiFi AP 'RaspiMIDIHub-XXXX' (password: midihub1)"
-echo "Then open http://192.168.4.1"
+echo "Done. Reach the UI on Ethernet (http://raspimidihub-<id>.local/)."

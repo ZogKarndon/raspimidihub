@@ -17,9 +17,7 @@ RaspiMIDIHub runs on stock Raspberry Pi hardware that you provide.
 +-------------+------------------+-------+--------------------------------------------------+
 
 **Recommended hardware: Pi 4B or Pi 5 -- they run the hub
-perfectly.** On a Pi 4 or 5 the access point can run 5 GHz while
-Bluetooth stays on 2.4 GHz (chapter 12): separate bands, no
-interference. Choose a Pi 5 for plugin-heavy rigs or BLE-MIDI in
+perfectly.** Choose a Pi 5 for plugin-heavy rigs or BLE-MIDI in
 the critical path. The Pi 3B+ and Zero 2 W also work but are not
 recommended: their USB 2.0 buses can drop MIDI events under load,
 so on one of these you accept that occasional notes may be dropped
@@ -96,27 +94,19 @@ iPads, and other hubs. Configure under **Settings → Ethernet**
 All supported models have on-board Bluetooth for BLE-MIDI
 peripherals (chapter 10); the Pi 3B / 3B+ radio has shorter range.
 
-On the Pi 3B, 3B+, and Pi Zero 2 W, Bluetooth and WiFi share one
-chip and antenna; the AP's continuous 2.4 GHz load can abort
-BLE-MIDI connections the instant they form (unit-dependent). For a
-BLE-dependent rig use a Pi 4 or Pi 5, whose separate radios coexist
-cleanly; chapter 10's *Limits* and *Troubleshooting* cover
-confirmation and workarounds.
+The Wi-Fi radio is switched off. On the Pi 3B, 3B+, and Pi Zero 2 W,
+Bluetooth and Wi-Fi share one chip; leaving the radio blocked keeps
+that antenna for BLE-MIDI. Chapter 10 covers the bridge.
 
 External Bluetooth USB dongles are not supported -- the bridge
 binds to the on-board adapter only.
 
-## WiFi
+## Wi-Fi
 
-All supported models have on-board WiFi; the Pi 4B, Pi 5, and
-Pi 3B+ are dual-band (2.4 and 5 GHz), the Pi 3B and Pi Zero 2 W
-2.4 GHz only.
-
-The AP defaults to 2.4 GHz; a dual-band Pi can switch it to 5 GHz
-(Settings → Network → *AP radio*, chapter 12), freeing the band
-Bluetooth shares -- the fix for the coexistence trouble above. One
-radio serves both AP and client mode (chapter 13.1), which is why
-**WiFi for updates** briefly drops the AP.
+On-board Wi-Fi is not used. The service blocks the radio at startup.
+Reach the hub over Ethernet (chapter 13). A second Pi attached by
+USB Ethernet is a wired interface, not Wi-Fi, and is included in
+SuperCollider discovery.
 
 ## Audio Output
 
@@ -153,12 +143,9 @@ stays valid across releases.
    the [Image release page](https://github.com/wamdam/raspimidihub/releases/tag/image-2026-04-21).
 3. In Pi Imager: **CHOOSE OS** → **Use custom** → the downloaded
    `.img.xz`; **CHOOSE STORAGE** → the SD card → **NEXT** →
-   **EDIT SETTINGS**. The install needs internet, so set one path:
-    - **WiFi SSID + password** -- cleanest; also sets the
-      regulatory country and works around a Pi Imager / Trixie bug
-      that otherwise leaves WiFi rfkilled.
-    - **Or plug in ethernet** at boot; the WiFi field can stay
-      empty.
+   **EDIT SETTINGS**. The install needs internet. Plug in Ethernet
+   at boot. Leave the Wi-Fi fields empty — the running hub does not
+   use Wi-Fi.
 
    Also set a **username and password** (or an SSH public key),
    keyboard layout, and region.
@@ -184,17 +171,17 @@ stays valid across releases.
    |      |                   | rebooting in 2 s       |
    +------+-------------------+------------------------+
    |  5   | Steady on (after  | Routing service        |
-   |      | reboot)           | running, AP up         |
+   |      | reboot)           | running                |
    +------+-------------------+------------------------+
 
    **One short flash per second with a long dark gap** means the
    install failed: SSH in with the wizard's account and run
    `journalctl -u raspimidihub-bootstrap`.
 
-6. **Join the AP** `RaspiMIDIHub-XXXX` (default password
-   `midihub1`); the captive portal opens the UI.
+6. **Open the UI** at `http://raspimidihub-<id>.local/` from a
+   machine on the same Ethernet network.
 7. **Plug in MIDI devices** and continue with chapter 4 (Quick
-   Start), or change the AP password first (chapter 12).
+   Start).
 
 ::: tip
 The wizard's user, SSH key, locale, and timezone survive the

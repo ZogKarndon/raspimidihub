@@ -98,8 +98,7 @@ sub-millisecond loop lag even on a busy unit.
 | **Python 3.11+** (stdlib only) | Routing service runtime |
 | **ALSA seq** (via `libasound2` + `ctypes`) | MIDI routing core |
 | **BlueZ** | Bluetooth stack; `midi` plugin disabled in favour of the in-tree bridge |
-| **hostapd + dnsmasq** | WiFi access point |
-| **wpa_supplicant** | WiFi client mode |
+| **OSC (in-tree, UDP)** | Ethernet control transport and SuperCollider `/status` discovery |
 | **avahi-daemon** | mDNS (`raspimidihub-<id>.local`) |
 | **systemd** | Service supervision |
 
@@ -163,7 +162,7 @@ Top-level keys of the exported / saved JSON:
 | `default_routing` | string | `"none"` (default) -- new devices arrive disconnected; `"all"` -- auto-connect every new device to every other. |
 | `connections` | list | Every saved connection in the matrix. |
 | `disconnected` | list | Connections explicitly toggled off but kept for re-enable. |
-| `wifi` | object | WiFi configuration; see *WiFi Configuration* below. |
+| `osc` | object | Ethernet OSC; see *OSC Configuration* below. A legacy `wifi` object in an old file is dropped on load. |
 | `network_midi` | object | Network MIDI (RTP-MIDI) sharing; see *Network MIDI Configuration* below. |
 | `midi2` | object | MIDI 2.0 behaviour: `force_midi1` (list of device stable-IDs to treat as MIDI 1.0 — escape hatch for misbehaving devices), `ci_enabled` (bool, default true — send MIDI-CI Capability Inquiry to bidirectional devices on connect), `ci_disabled` (list of stable-IDs to never probe). |
 
@@ -181,24 +180,23 @@ filter object (channel mask, message-type mask), the mappings list
 enable flag (toggling off keeps the entry; removing deletes it).
 The JSON emitted by **Export Config** is the authoritative schema.
 
-## WiFi Configuration
+## OSC Configuration
 
-The `wifi` object:
+The `osc` object (Settings → Network; chapter 13 for the wire
+format and what SuperCollider discovery does):
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| `mode` | string | Current mode -- `"ap"` or `"client"`. |
-| `ap_ssid` | string | AP SSID (auto-generated when empty). |
-| `ap_password` | string | AP password (default `"midihub1"`). |
-| `ap_band` | string | AP radio band -- `"2.4"` (default) or `"5"`. 5 GHz auto-falls back to 2.4 on a 2.4-only radio or a failed bring-up. |
-| `ap_country` | string | Regulatory country (ISO alpha-2, e.g. `"DE"`). Empty = auto-detect from the kernel regdomain. Required for 5 GHz. |
-| `client_ssid` | string | Home WiFi SSID. |
-| `client_password` | string | Home WiFi password. |
-| `wifi_mode_pref` | string | Mode preference -- `"ap_only"`, `"wifi_for_updates"`, or `"wifi_always"`. |
+| `enabled` | bool | Bind the UDP socket and probe for servers. Default true. |
+| `listen_port` | int | UDP port for inbound OSC. Default `9000`. |
+| `sc_port` | int | Port used for `/status` probes and for peers written without a port. Default `57110`. |
+| `target` | string | `host` or `host:port` for outbound MIDI-OSC. Empty: use the only discovered server, or send nowhere when several are visible. |
+| `manual_peers` | list | Extra `host:port` values included in the `/status` probe. |
 
-`mode` is the *current* live mode; `wifi_mode_pref` the preference
-set in **Settings**. The service reconciles preference to mode as
-conditions change.
+Like `network_midi`, an appliance setting: changes apply and save
+immediately, outside the dirty-state model.
+
+There is no `wifi` object. Networking is Ethernet (and USB Ethernet).
 
 ## Network MIDI Configuration
 
@@ -213,8 +211,8 @@ The `network_midi` object (Settings → Network MIDI; chapter 13's
 | `mirrored_foreign` | list | Manually mirrored non-hub sessions (by mDNS service name). |
 | `manual_peers` | list | IPs/hostnames invited directly when mDNS discovery cannot reach them. |
 
-Like `wifi`, an appliance setting: changes apply and save
-immediately, outside the dirty-state model.
+An appliance setting: changes apply and save immediately, outside
+the dirty-state model.
 
 ## Plugin Instances
 
@@ -324,13 +322,12 @@ underpowered PSU, or a plugin overworking a callback.
 
 | Parameter | Value |
 |-----------|-------|
-| AP SSID format | `RaspiMIDIHub-XXXX` (last four chars derived from MAC) |
-| AP default password | `midihub1` (change immediately) |
-| AP IP range | DHCP from the captive-portal subnet (typically `172.24.1.0/24`) |
-| AP gateway | `172.24.1.1` (typical) |
-| mDNS hostname | `raspimidihub-<id>.local` (unique per hub; `<id>` = title-bar/WiFi code). Bare `raspimidihub.local` does not resolve |
+| Hub id | `RaspiMIDIHub-XXXX` (last four hex chars of the wlan0 MAC, or eth0 if there is no wireless NIC). Title bar and mDNS name. Not a Wi-Fi SSID. |
+| OSC listen | UDP `9000` |
+| SuperCollider probe | UDP `/status` to port `57110` on wired interfaces |
+| mDNS hostname | `raspimidihub-<id>.local` (unique per hub; `<id>` = title-bar code). Bare `raspimidihub.local` does not resolve |
 | HTTP server port | 80 |
-| HTTPS | Not used (LAN-only; trust model is the AP password) |
+| HTTPS | Not used (trusted LAN) |
 | SSE endpoint | `/api/events` (long-lived `text/event-stream`) |
 | BLE-MIDI service UUID | `03B80E5A-EDE8-4B33-A751-6CE34EC4C700` |
 | BLE-MIDI characteristic UUID | `7772E5DB-3868-4112-A1A9-F2669D106BF3` |
@@ -352,7 +349,7 @@ underpowered PSU, or a plugin overworking a callback.
 
 | Package | Role |
 |---------|------|
-| `raspimidihub` | The routing service, the plugin host, the web UI, the access point |
+| `raspimidihub` | The routing service, the plugin host, the web UI, OSC |
 | `raspimidihub-rosetup` | Read-only filesystem hardening and CPU isolation |
 
 `raspimidihub-rosetup` is technically optional -- the service runs
